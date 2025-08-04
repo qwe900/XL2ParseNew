@@ -5,6 +5,7 @@
 
 import { SerialPort } from 'serialport';
 import { ReadlineParser } from '@serialport/parser-readline';
+import { platform } from 'os';
 import { 
   TIMEOUTS, 
   INTERVALS, 
@@ -13,6 +14,7 @@ import {
   DEVICE_IDENTIFIERS,
   FREQUENCY_CONFIG 
 } from '../constants.js';
+import { WINDOWS_CONFIG } from '../../config-windows.js';
 import { logger } from '../utils/logger.js';
 import { 
   XL2Error, 
@@ -58,15 +60,32 @@ export class XL2Connection {
   async scanAllPortsForXL2() {
     try {
       const ports = await SerialPort.list();
-      logger.info('Scanning all serial ports for XL2 devices', { portCount: ports.length });
+      const isWindows = platform() === 'win32';
+      
+      logger.info('Scanning all serial ports for XL2 devices', { 
+        portCount: ports.length,
+        platform: isWindows ? 'Windows' : 'Unix'
+      });
+      
+      // Log all available ports for debugging
+      logger.debug('Available serial ports:', ports.map(p => ({
+        path: p.path,
+        manufacturer: p.manufacturer || 'Unknown',
+        productId: p.productId || 'Unknown',
+        vendorId: p.vendorId || 'Unknown'
+      })));
       
       const xl2Devices = [];
       
-      for (const portInfo of ports) {
+      // Filter ports based on platform
+      const candidatePorts = this._filterPortsForXL2(ports, isWindows);
+      logger.info(`Found ${candidatePorts.length} candidate ports for XL2 testing`);
+      
+      for (const portInfo of candidatePorts) {
         logger.debug(`Testing port: ${portInfo.path}`);
         
         try {
-          const deviceInfo = await this._testPortForXL2(portInfo);
+          const deviceInfo = await this._testPortForXL2(portInfo, isWindows);
           const isXL2 = this._isXL2Response(deviceInfo);
           
           xl2Devices.push({
@@ -98,19 +117,85 @@ export class XL2Connection {
   }
 
   /**
+   * Filter ports for XL2 device candidates
+   * @private
+   * @param {Array} ports - All available ports
+   * @param {boolean} isWindows - Is Windows platform
+   * @returns {Array} Filtered ports
+   */
+  _filterPortsForXL2(ports, isWindows) {
+    if (isWindows) {
+      // Windows-specific filtering
+      return ports.filter(port => {
+        const path = port.path.toLowerCase();
+        const manufacturer = (port.manufacturer || '').toLowerCase();
+        const productId = (port.productId || '').toLowerCase();
+        const vendorId = port.vendorId || '';
+        
+        // Check for COM ports
+        if (!path.match(/^com\d+$/)) {
+          return false;
+        }
+        
+        // Check for known XL2 identifiers
+        const hasXL2Manufacturer = WINDOWS_CONFIG.deviceIdentifiers.xl2.manufacturers.some(m => 
+          manufacturer.includes(m.toLowerCase())
+        );
+        
+        const hasXL2VendorId = WINDOWS_CONFIG.deviceIdentifiers.xl2.vendorIds.includes(vendorId);
+        const hasXL2ProductId = WINDOWS_CONFIG.deviceIdentifiers.xl2.productIds.some(p => 
+          productId.includes(p.toLowerCase())
+        );
+        
+        // Include port if it matches any XL2 criteria or is a standard COM port
+        return hasXL2Manufacturer || hasXL2VendorId || hasXL2ProductId || true; // Include all COM ports for now
+      });
+    } else {
+      // Unix-specific filtering (existing logic)
+      return ports.filter(port => {
+        const path = port.path.toLowerCase();
+        const manufacturer = (port.manufacturer || '').toLowerCase();
+        
+        return path.includes('ttyusb') || 
+               path.includes('ttyacm') || 
+               path.includes('xl2') ||
+               manufacturer.includes('nti') ||
+               manufacturer.includes('xl2') ||
+               port.productId === '0004';
+      });
+    }
+  }
+
+  /**
    * Test a specific port for XL2 device
    * @private
    * @param {Object} portInfo - Port information
+   * @param {boolean} isWindows - Is Windows platform
    * @returns {Promise<string>} Device response
    */
-  async _testPortForXL2(portInfo) {
-    const testPort = new SerialPort({
+  async _testPortForXL2(portInfo, isWindows = false) {
+    const serialConfig = {
       path: portInfo.path,
       baudRate: SERIAL_CONFIG.XL2_BAUD_RATE,
       dataBits: SERIAL_CONFIG.DATA_BITS,
       stopBits: SERIAL_CONFIG.STOP_BITS,
-      parity: SERIAL_CONFIG.PARITY
-    });
+      parity: SERIAL_CONFIG.PARITY,
+      autoOpen: false
+    };
+    
+    // Add Windows-specific settings
+    if (isWindows) {
+      Object.assign(serialConfig, {
+        rtscts: false,
+        xon: false,
+        xoff: false,
+        xany: false,
+        lock: false,
+        highWaterMark: 65536
+      });
+    }
+    
+    const testPort = new SerialPort(serialConfig);
 
     const testParser = testPort.pipe(new ReadlineParser({ delimiter: '\r\n' }));
     
@@ -247,24 +332,42 @@ export class XL2Connection {
    * @param {string} portPath - Port path
    */
   async _establishConnection(portPath) {
-    this.port = new SerialPort({
+    const isWindows = platform() === 'win32';
+    
+    const serialConfig = {
       path: portPath,
       baudRate: SERIAL_CONFIG.XL2_BAUD_RATE,
       dataBits: SERIAL_CONFIG.DATA_BITS,
       stopBits: SERIAL_CONFIG.STOP_BITS,
-      parity: SERIAL_CONFIG.PARITY
-    });
+      parity: SERIAL_CONFIG.PARITY,
+      autoOpen: false
+    };
+    
+    // Add Windows-specific settings for better compatibility
+    if (isWindows) {
+      Object.assign(serialConfig, WINDOWS_CONFIG.serialSettings.xl2);
+      logger.info(`Using Windows-specific serial settings for ${portPath}`);
+    }
+    
+    this.port = new SerialPort(serialConfig);
 
     this.parser = this.port.pipe(new ReadlineParser({ delimiter: '\r\n' }));
 
     return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new TimeoutError('Connection timeout'));
+      }, TIMEOUTS.CONNECTION);
+
       this.port.on('open', () => {
+        clearTimeout(timeout);
         this.isConnected = true;
         this._setupEventHandlers();
+        logger.info(`✅ XL2 serial port opened: ${portPath}`);
         resolve();
       });
 
       this.port.on('error', (error) => {
+        clearTimeout(timeout);
         this.isConnected = false;
         this._emitEvent('xl2-error', error.message);
         reject(new SerialPortError(`Port error: ${error.message}`));
@@ -274,6 +377,14 @@ export class XL2Connection {
         logger.connection('XL2', null, false);
         this.isConnected = false;
         this._emitEvent('xl2-disconnected');
+      });
+
+      // Manually open the port (required when autoOpen is false)
+      this.port.open((error) => {
+        if (error) {
+          clearTimeout(timeout);
+          reject(new SerialPortError(`Failed to open port: ${error.message}`));
+        }
       });
     });
   }

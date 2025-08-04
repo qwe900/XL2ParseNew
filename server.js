@@ -27,7 +27,7 @@ import { appConfig } from './src/config/AppConfig.js';
 import { logger } from './src/utils/logger.js';
 import { ErrorHandler } from './src/utils/errors.js';
 import { XL2Connection } from './src/devices/XL2Connection.js';
-import GPSLogger from './gps-logger.js';
+import GPSLogger from './src/devices/gps-logger.js';
 import { createApiRoutes, createApiLogger } from './src/routes/apiRoutes.js';
 import { 
   setupSocketHandlers, 
@@ -36,6 +36,7 @@ import {
 } from './src/sockets/socketHandlers.js';
 import { createCSVService } from './src/services/csvService.js';
 import { RPI_CONFIG, detectPiModel, systemHealth } from './config-rpi.js';
+import { WINDOWS_CONFIG, detectWindowsSystemType, windowsSystemHealth } from './config-windows.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -64,12 +65,19 @@ class XL2WebServer {
       this.config = await appConfig.initialize();
       logger.info('🚀 Starting XL2 Web Server', appConfig.getSummary());
 
-      // Detect Raspberry Pi model if applicable
+      // Detect platform-specific configurations
       if (RPI_CONFIG.isRaspberryPi) {
         const piModel = await detectPiModel();
         if (piModel) {
           this.config.platform.piModel = piModel;
           logger.info(`🍓 Detected Pi Model: ${piModel}`);
+        }
+      } else if (WINDOWS_CONFIG.isWindows) {
+        const windowsSystemType = await detectWindowsSystemType();
+        if (windowsSystemType) {
+          this.config.platform.windowsSystemType = windowsSystemType;
+          logger.info(`🪟 Detected Windows System Type: ${windowsSystemType}`);
+          logger.info(`🪟 Windows Version: ${WINDOWS_CONFIG.version}`);
         }
       }
 
@@ -276,25 +284,68 @@ class XL2WebServer {
   }
 
   /**
-   * Setup system monitoring for Raspberry Pi with Pi 5 enhancements
+   * Setup system monitoring for all platforms (Raspberry Pi and Windows)
    */
   setupSystemMonitoring() {
     if (!this.config.platform.enableSystemMonitoring) {
       return;
     }
 
-    logger.info('📊 Setting up enhanced system monitoring...');
+    const isWindows = this.config.platform.isWindows;
+    const isRaspberryPi = this.config.platform.isRaspberryPi;
+    
+    logger.info(`📊 Setting up system monitoring for ${isWindows ? 'Windows' : (isRaspberryPi ? 'Raspberry Pi' : 'Unix')}...`);
     
     setInterval(async () => {
       try {
-        const { systemHealth, detectPiModel, RPI_CONFIG } = await import('./config-rpi.js');
-        const piModel = await detectPiModel();
-        
-        if (piModel === 'pi5' || piModel === 'pi4') {
-          // Use enhanced monitoring for Pi 5/4
-          const tempStatus = await systemHealth.getTemperatureStatus();
-          const throttlingDetails = await systemHealth.getThrottlingDetails();
-          const diskSpace = await systemHealth.getDiskSpace();
+        if (isWindows) {
+          // Windows system monitoring
+          const systemStatus = await windowsSystemHealth.getSystemStatus();
+          
+          // CPU usage warnings
+          if (systemStatus.cpu && systemStatus.cpu.usage > 90) {
+            logger.warn(`🪟 High CPU usage: ${systemStatus.cpu.usage}%`);
+            this.io.emit('system-warning', {
+              type: 'cpu_usage',
+              value: systemStatus.cpu.usage,
+              threshold: 90,
+              platform: 'windows'
+            });
+          }
+          
+          // Memory usage warnings
+          if (systemStatus.memory && systemStatus.memory.usagePercent > 85) {
+            logger.warn(`🪟 High memory usage: ${systemStatus.memory.usagePercent}%`);
+            this.io.emit('system-warning', {
+              type: 'memory_usage',
+              value: systemStatus.memory.usagePercent,
+              threshold: 85,
+              platform: 'windows'
+            });
+          }
+          
+          // Disk space warnings
+          if (systemStatus.disk && systemStatus.disk.available < WINDOWS_CONFIG.system.minDiskSpace) {
+            logger.warn(`🪟 Low disk space: ${systemStatus.disk.available}MB remaining (${systemStatus.disk.usagePercent}% used)`);
+            this.io.emit('system-warning', {
+              type: 'disk_space',
+              available: systemStatus.disk.available,
+              threshold: WINDOWS_CONFIG.system.minDiskSpace,
+              usagePercent: systemStatus.disk.usagePercent,
+              platform: 'windows'
+            });
+          }
+          
+        } else if (isRaspberryPi) {
+          // Raspberry Pi system monitoring (existing logic)
+          const { systemHealth, detectPiModel, RPI_CONFIG } = await import('./config-rpi.js');
+          const piModel = await detectPiModel();
+          
+          if (piModel === 'pi5' || piModel === 'pi4') {
+            // Use enhanced monitoring for Pi 5/4
+            const tempStatus = await systemHealth.getTemperatureStatus();
+            const throttlingDetails = await systemHealth.getThrottlingDetails();
+            const diskSpace = await systemHealth.getDiskSpace();
           
           // Temperature warnings with model-specific thresholds
           if (tempStatus.status === 'warning' || tempStatus.status === 'critical') {
@@ -365,6 +416,7 @@ class XL2WebServer {
               threshold: RPI_CONFIG.system.minDiskSpace
             });
           }
+          }
         }
       } catch (error) {
         logger.debug('System monitoring error', error);
@@ -392,11 +444,14 @@ class XL2WebServer {
         });
       });
 
+      const platformName = this.config.platform.isWindows ? 'Windows' : 
+                           (this.config.platform.isRaspberryPi ? 'Raspberry Pi' : 'Unix');
+      
       logger.info('🚀 XL2 Web Server started successfully', {
         port: this.config.server.port,
         host: this.config.server.host,
         environment: this.config.server.environment,
-        platform: this.config.platform.isRaspberryPi ? 'Raspberry Pi' : 'Other'
+        platform: platformName
       });
 
       console.log('');
@@ -577,19 +632,48 @@ class XL2WebServer {
   }
 
   /**
-   * Get system performance data with Pi 5 enhancements
+   * Get system performance data for all platforms
    */
   async getSystemPerformanceData() {
-    const { systemHealth, detectPiModel } = await import('./config-rpi.js');
+    const isWindows = this.config.platform.isWindows;
+    const isRaspberryPi = this.config.platform.isRaspberryPi;
     
     try {
-      // For Pi 5 and Pi 4, use comprehensive system status
-      const piModel = await detectPiModel();
-      
-      if (piModel === 'pi5' || piModel === 'pi4') {
+      if (isWindows) {
+        // Windows system performance data
+        const systemStatus = await windowsSystemHealth.getSystemStatus();
+        
+        return {
+          platform: 'windows',
+          systemType: systemStatus.systemType,
+          cpuUsage: systemStatus.cpu?.usage || null,
+          cpuCores: systemStatus.cpu?.cores || null,
+          cpuModel: systemStatus.cpu?.model || null,
+          cpuSpeed: systemStatus.cpu?.speed || null,
+          memoryUsage: systemStatus.memory?.usagePercent || null,
+          memoryDetails: {
+            total: systemStatus.memory?.total || null,
+            used: systemStatus.memory?.used || null,
+            available: systemStatus.memory?.available || null
+          },
+          diskSpace: systemStatus.disk?.available || null,
+          diskUsagePercent: systemStatus.disk?.usagePercent || null,
+          uptime: process.uptime(),
+          connectedClients: this.io.engine.clientsCount,
+          systemInfo: systemStatus.system,
+          timestamp: systemStatus.timestamp
+        };
+        
+      } else if (isRaspberryPi) {
+        // Raspberry Pi system performance data
+        const { systemHealth, detectPiModel } = await import('./config-rpi.js');
+        const piModel = await detectPiModel();
+        
+        if (piModel === 'pi5' || piModel === 'pi4') {
         const systemStatus = await systemHealth.getSystemStatus();
         
         return {
+          platform: 'raspberry-pi',
           // Enhanced data for Pi 5/4
           cpuTemp: systemStatus.temperature?.temp || null,
           temperatureStatus: systemStatus.temperature?.status || 'unknown',
@@ -610,17 +694,18 @@ class XL2WebServer {
           piModel: systemStatus.model,
           timestamp: systemStatus.timestamp
         };
-      } else {
-        // Fallback for older Pi models or non-Pi systems
-        const [cpuTemp, throttled, diskSpace, memoryUsage, systemLoad] = await Promise.all([
-          systemHealth.getCPUTemperature().catch(() => null),
-          systemHealth.isThrottled().catch(() => false),
-          systemHealth.getDiskSpace().catch(() => null),
-          this.getMemoryUsage().catch(() => null),
-          this.getSystemLoad().catch(() => null)
-        ]);
+        } else {
+          // Fallback for older Pi models
+          const [cpuTemp, throttled, diskSpace, memoryUsage, systemLoad] = await Promise.all([
+            systemHealth.getCPUTemperature().catch(() => null),
+            systemHealth.isThrottled().catch(() => false),
+            systemHealth.getDiskSpace().catch(() => null),
+            this.getMemoryUsage().catch(() => null),
+            this.getSystemLoad().catch(() => null)
+          ]);
         
         return {
+          platform: 'raspberry-pi',
           cpuTemp,
           temperatureStatus: cpuTemp ? (cpuTemp > 70 ? 'warning' : 'normal') : 'unknown',
           memoryUsage,
@@ -631,20 +716,35 @@ class XL2WebServer {
           throttled,
           piModel
         };
+        }
+      } else {
+        // Other Unix systems - basic monitoring
+        const [memoryUsage, systemLoad] = await Promise.all([
+          this.getMemoryUsage().catch(() => null),
+          this.getSystemLoad().catch(() => null)
+        ]);
+        
+        return {
+          platform: 'unix',
+          memoryUsage,
+          uptime: process.uptime(),
+          connectedClients: this.io.engine.clientsCount,
+          systemLoad
+        };
       }
     } catch (error) {
-      logger.debug('Error getting enhanced system performance data, using fallback', error);
+      logger.debug('Error getting system performance data, using fallback', error);
       
       // Basic fallback
       return {
+        platform: 'unknown',
         cpuTemp: null,
         memoryUsage: null,
         diskSpace: null,
         uptime: process.uptime(),
         connectedClients: this.io.engine.clientsCount,
         systemLoad: null,
-        throttled: false,
-        piModel: 'unknown'
+        throttled: false
       };
     }
   }

@@ -7,7 +7,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "install-service": "sudo node install-service.js"
+    "install-service": "sudo node install-service.js",
+    "install-windows": "powershell -ExecutionPolicy Bypass -File install-windows.ps1",
+    "install-windows-service": "powershell -ExecutionPolicy Bypass -File install-windows.ps1 -InstallAsService",
+    "test-ports": "node -e \"import('./src/devices/XL2Connection.js').then(({XL2Connection}) => { const xl2 = new XL2Connection(); xl2.scanAllPortsForXL2().then(console.log); });\"",
+    "test-gps": "node -e \"import('./src/devices/gps-logger.js').then(({default: GPSLogger}) => { const gps = new GPSLogger(); gps.scanForGPS().then(console.log); });\""
   },
   "dependencies": {
     "compression": "^1.7.4",
