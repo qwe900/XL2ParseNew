@@ -10,19 +10,18 @@
     "install-service": "sudo node install-service.js",
     "install-windows": "powershell -ExecutionPolicy Bypass -File install-windows.ps1",
     "install-windows-service": "powershell -ExecutionPolicy Bypass -File install-windows.ps1 -InstallAsService",
-    "test-ports": "node -e \"import('./src/devices/XL2Connection.js').then(({XL2Connection}) => { const xl2 = new XL2Connection(); xl2.scanAllPortsForXL2().then(console.log); });\"",
-    "test-gps": "node -e \"import('./src/devices/gps-logger.js').then(({default: GPSLogger}) => { const gps = new GPSLogger(); gps.scanForGPS().then(console.log); });\""
+    "port-info": "node tools/port-info.js"
   },
   "dependencies": {
     "compression": "^1.7.4",
     "cors": "^2.8.5",
     "csv-writer": "^1.6.0",
+    "dotenv": "^17.2.1",
     "express": "^4.18.2",
     "express-rate-limit": "^7.5.1",
     "gps": "^0.6.1",
     "helmet": "^7.0.0",
-    "serialport": "^12.0.0",
-    "socket.io": "^4.7.2"
+    "serialport": "^12.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

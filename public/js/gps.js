@@ -4,8 +4,8 @@
  */
 
 class GPSManager {
-    constructor(socket) {
-        this.socket = socket;
+    constructor(eventSource) {
+        this.eventSource = eventSource;
         this.map = null;
         this.marker = null;
         this.track = [];
@@ -30,29 +30,55 @@ class GPSManager {
     }
 
     /**
-     * Setup socket event listeners
+     * Setup SSE event listeners
      */
     setupEventListeners() {
-        // GPS connection events
-        this.socket.on(CONFIG.SOCKET_EVENTS.GPS_CONNECTED, (port) => {
-            this.handleGPSConnected(port);
+        if (!this.eventSource) {
+            console.warn('GPSManager: No EventSource provided');
+            return;
+        }
+
+        // Listen for GPS connection events
+        this.eventSource.addEventListener('gps-connected', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                this.handleGPSConnected(data.port);
+            } catch (error) {
+                console.error('Error parsing GPS connection data:', error);
+            }
         });
 
-        this.socket.on(CONFIG.SOCKET_EVENTS.GPS_DISCONNECTED, () => {
+        this.eventSource.addEventListener('gps-disconnected', (event) => {
             this.handleGPSDisconnected();
         });
 
-        this.socket.on(CONFIG.SOCKET_EVENTS.GPS_ERROR, (error) => {
-            this.handleGPSError(error);
+        this.eventSource.addEventListener('gps-error', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                this.handleGPSError(data);
+            } catch (error) {
+                console.error('Error parsing GPS error data:', error);
+            }
         });
 
-        // GPS data events
-        this.socket.on(CONFIG.SOCKET_EVENTS.GPS_UPDATE, (location) => {
-            this.handleGPSUpdate(location);
+        // Listen for GPS location updates
+        this.eventSource.addEventListener('gps-location-update', (event) => {
+            try {
+                const location = JSON.parse(event.data);
+                this.handleGPSUpdate(location);
+            } catch (error) {
+                console.error('Error parsing GPS location update data:', error);
+            }
         });
 
-        this.socket.on(CONFIG.SOCKET_EVENTS.GPS_PORTS, (ports) => {
-            this.handleGPSPorts(ports);
+        // Listen for GPS port scan results
+        this.eventSource.addEventListener('gps-ports', (event) => {
+            try {
+                const ports = JSON.parse(event.data);
+                this.handleGPSPorts(ports);
+            } catch (error) {
+                console.error('Error parsing GPS ports data:', error);
+            }
         });
     }
 
@@ -295,23 +321,36 @@ class GPSManager {
     /**
      * Scan for GPS ports
      */
-    scanGPS() {
+    async scanGPS() {
         try {
             ui.showToast('Scanning for GPS devices...', 'info');
             ui.updateScanStatus('Scanning for GPS devices...', 'scanning', 'gpsScanStatus');
             
-            this.socket.emit(CONFIG.SOCKET_EVENTS.GPS_SCAN);
+            const response = await fetch('/api/gps/scan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                ui.showToast('GPS scan completed', 'success');
+                ui.updateScanStatus('Scan completed', 'success', 'gpsScanStatus');
+            } else {
+                throw new Error(result.error?.message || 'GPS scan failed');
+            }
             
         } catch (error) {
             console.error('Error scanning for GPS:', error);
             ui.showToast('Error scanning for GPS devices', 'error');
+            ui.updateScanStatus('Scan failed', 'error', 'gpsScanStatus');
         }
     }
 
     /**
      * Connect to GPS device
      */
-    connectGPS() {
+    async connectGPS() {
         try {
             const gpsSelect = document.getElementById('gpsSelect');
             if (!gpsSelect || !gpsSelect.value) {
@@ -324,7 +363,19 @@ class GPSManager {
             ui.showToast(`Connecting to GPS: ${selectedPort}`, 'info');
             ui.setButtonLoading('gpsConnectBtn', true, 'Connecting...');
             
-            this.socket.emit(CONFIG.SOCKET_EVENTS.GPS_CONNECT, selectedPort);
+            const response = await fetch('/api/gps/connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ port: selectedPort })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                ui.showToast(`GPS connection initiated: ${selectedPort}`, 'info');
+            } else {
+                throw new Error(result.error?.message || 'GPS connection failed');
+            }
             
         } catch (error) {
             console.error('Error connecting to GPS:', error);
@@ -336,10 +387,22 @@ class GPSManager {
     /**
      * Disconnect from GPS device
      */
-    disconnectGPS() {
+    async disconnectGPS() {
         try {
             ui.setButtonLoading('gpsDisconnectBtn', true, 'Disconnecting...');
-            this.socket.emit(CONFIG.SOCKET_EVENTS.GPS_DISCONNECT);
+            
+            const response = await fetch('/api/gps/disconnect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                ui.showToast('GPS disconnection initiated', 'info');
+            } else {
+                throw new Error(result.error?.message || 'GPS disconnection failed');
+            }
             
         } catch (error) {
             console.error('Error disconnecting GPS:', error);

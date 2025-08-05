@@ -5,11 +5,12 @@ import GPS from 'gps';
 import createCsvWriter from 'csv-writer';
 import fs from 'fs';
 import path from 'path';
-import { RPI_CONFIG } from '../../config-rpi.js';
-import { WINDOWS_CONFIG } from '../../config-windows.js';
+import { RPI_CONFIG } from '../config/config-rpi.js';
+import { WINDOWS_CONFIG } from '../config/config-windows.js';
 
 class GPSLogger {
-  constructor() {
+  constructor(eventEmitter = null) {
+    this.eventEmitter = eventEmitter;
     this.gpsPort = null;
     this.gpsParser = null;
     this.gps = new GPS();
@@ -64,6 +65,7 @@ class GPSLogger {
         console.log(`🎯 GPS: ${data.lat.toFixed(6)}, ${data.lon.toFixed(6)} | Alt: ${data.alt}m | Sats: ${data.satellites}`);
         
         // Emit GPS update to clients
+        this._emitEvent('gps-location-update', this.currentLocation);
         if (this.onGPSUpdate) {
           this.onGPSUpdate(this.currentLocation);
         }
@@ -269,11 +271,13 @@ class GPSLogger {
           this.gpsPort.on('error', (error) => {
             console.error('❌ GPS port error:', error);
             this.isGPSConnected = false;
+            this._emitEvent('gps-error', error.message);
           });
 
           this.gpsPort.on('close', () => {
             console.log('🛰️ GPS port closed');
             this.isGPSConnected = false;
+            this._emitEvent('gps-disconnected', { port: portPath });
           });
 
           // Wait for port to open
@@ -281,6 +285,7 @@ class GPSLogger {
             this.gpsPort.on('open', () => {
               this.isGPSConnected = true;
               console.log(`✅ GPS connected successfully at ${baudRate} baud`);
+              this._emitEvent('gps-connected', { port: portPath, baudRate });
               resolve();
             });
             
@@ -389,6 +394,11 @@ class GPSLogger {
 
     this.isLogging = true;
     console.log(`📝 ${fileExists ? 'Appending to existing' : 'Creating new'} log file: ${this.logFilePath}`);
+    this._emitEvent('gps-logging-started', {
+      filePath: this.logFilePath,
+      startTime: this.logStartTime,
+      append: fileExists
+    });
   }
 
   stopLogging() {
@@ -406,6 +416,8 @@ class GPSLogger {
       startTime: this.logStartTime,
       endTime: new Date()
     };
+    
+    this._emitEvent('gps-logging-stopped', logInfo);
     
     this.logFilePath = null;
     this.logStartTime = null;
@@ -465,6 +477,18 @@ class GPSLogger {
            this.currentLocation.latitude !== null && 
            this.currentLocation.longitude !== null &&
            this.currentLocation.fix > 0;
+  }
+
+  /**
+   * Emit event if event emitter is available
+   * @private
+   * @param {string} event - Event name
+   * @param {*} data - Event data
+   */
+  _emitEvent(event, data) {
+    if (this.eventEmitter) {
+      this.eventEmitter.emit(event, data);
+    }
   }
 }
 

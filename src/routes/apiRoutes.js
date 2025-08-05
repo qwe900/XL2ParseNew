@@ -15,9 +15,10 @@ import { validateRequest } from '../utils/validation.js';
  * @param {Object} xl2 - XL2Connection instance
  * @param {Object} gpsLogger - GPSLogger instance
  * @param {Function} generatePathFromCSV - CSV data generator function
+ * @param {Object} startupService - StartupService instance (optional)
  * @returns {express.Router} Express router
  */
-export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
+export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupService = null) {
   const router = express.Router();
 
   // Device status endpoints
@@ -166,7 +167,7 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
     });
   }));
 
-  router.get('/gps/scan', asyncHandler(async (req, res) => {
+  router.post('/gps/scan', asyncHandler(async (req, res) => {
     const gpsPorts = await gpsLogger.scanForGPS();
     
     res.json({
@@ -280,6 +281,88 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
       data: systemInfo
     });
   }));
+
+  // Device Management endpoints (if startup service is available)
+  if (startupService) {
+    // Get startup status and results
+    router.get('/startup/status', asyncHandler(async (req, res) => {
+      const startupResults = startupService.getStartupResults();
+      const isComplete = startupService.isStartupCompleted();
+      
+      res.json({
+        success: true,
+        data: {
+          isComplete,
+          results: startupResults
+        }
+      });
+    }));
+
+    // Get detected devices
+    router.get('/devices/detected', asyncHandler(async (req, res) => {
+      const deviceManager = startupService.getDeviceManager();
+      const allDevices = deviceManager.getAllDetectedDevices();
+      const scanSummary = deviceManager.getScanSummary();
+      
+      res.json({
+        success: true,
+        data: {
+          devices: allDevices,
+          summary: scanSummary
+        }
+      });
+    }));
+
+    // Rescan devices
+    router.post('/devices/rescan', asyncHandler(async (req, res) => {
+      logger.info('API device rescan requested');
+      const scanResults = await startupService.rescanDevices();
+      
+      res.json({
+        success: true,
+        data: scanResults,
+        message: 'Device rescan completed'
+      });
+    }));
+
+    // Reconnect devices
+    router.post('/devices/reconnect', asyncHandler(async (req, res) => {
+      logger.info('API device reconnection requested');
+      const reconnectResults = await startupService.reconnectDevices();
+      
+      res.json({
+        success: true,
+        data: reconnectResults,
+        message: 'Device reconnection completed'
+      });
+    }));
+
+    // Get device scan summary
+    router.get('/devices/scan-summary', asyncHandler(async (req, res) => {
+      const deviceManager = startupService.getDeviceManager();
+      const scanSummary = deviceManager.getScanSummary();
+      
+      res.json({
+        success: true,
+        data: scanSummary
+      });
+    }));
+
+    // Get best detected devices
+    router.get('/devices/best', asyncHandler(async (req, res) => {
+      const deviceManager = startupService.getDeviceManager();
+      const bestXL2 = deviceManager.getBestXL2Device();
+      const bestGPS = deviceManager.getBestGPSDevice();
+      
+      res.json({
+        success: true,
+        data: {
+          xl2: bestXL2,
+          gps: bestGPS
+        }
+      });
+    }));
+  }
 
   // Error handling middleware for API routes
   router.use((error, req, res, next) => {

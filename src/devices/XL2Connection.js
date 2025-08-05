@@ -14,7 +14,7 @@ import {
   DEVICE_IDENTIFIERS,
   FREQUENCY_CONFIG 
 } from '../constants.js';
-import { WINDOWS_CONFIG } from '../../config-windows.js';
+import { WINDOWS_CONFIG } from '../config/config-windows.js';
 import { logger } from '../utils/logger.js';
 import { 
   XL2Error, 

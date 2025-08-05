@@ -6,8 +6,8 @@
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { platform } from 'os';
-import { RPI_CONFIG, getOptimalConfig } from '../../config-rpi.js';
-import { WINDOWS_CONFIG, getOptimalWindowsConfig } from '../../config-windows.js';
+import { RPI_CONFIG, getOptimalConfig } from './config-rpi.js';
+import { WINDOWS_CONFIG, getOptimalWindowsConfig } from './config-windows.js';
 import { SERIAL_CONFIG, BUFFER_SIZES, INTERVALS } from '../constants.js';
 import { ConfigError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';

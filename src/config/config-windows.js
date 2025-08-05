@@ -32,7 +32,7 @@ export const WINDOWS_CONFIG = {
     
     // Common GPS device ports on Windows (try in order)
     gps: [
-      'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'COM10',
+      'COM4', 'COM3', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'COM10',
       'COM11', 'COM12', 'COM13', 'COM14', 'COM15', 'COM16'
     ]
   },
@@ -169,7 +169,7 @@ export const WINDOWS_CONFIG = {
       // Windows-specific manufacturer strings for GPS
       manufacturers: [
         'ch340', 'ch341', 'prolific', 'ftdi', 'silicon labs',
-        'usb serial', 'gps', 'u-blox', 'mediatek'
+        'usb serial', 'gps', 'u-blox', 'mediatek', 'microsoft'
       ],
       // Windows COM port patterns
       portPatterns: [
@@ -177,8 +177,8 @@ export const WINDOWS_CONFIG = {
         /^\\\\\.\\COM\d+$/i
       ],
       // USB vendor/product IDs for common GPS modules
-      vendorIds: ['1a86', '067b', '0403', '10c4'], // CH340, Prolific, FTDI, Silicon Labs
-      productIds: ['7523', '2303', '6001', 'ea60']
+      vendorIds: ['1a86', '067b', '0403', '10c4', '1546'], // CH340, Prolific, FTDI, Silicon Labs, u-blox
+      productIds: ['7523', '2303', '6001', 'ea60', '01a7'] // Added u-blox GPS product ID
     }
   },
   
