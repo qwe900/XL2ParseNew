@@ -202,6 +202,9 @@ class XL2WebServer {
   async setupSSE() {
     logger.info('📡 Setting up Server-Sent Events...');
     
+    // Setup device status callback for new clients
+    this.setupDeviceStatusCallback();
+    
     // Setup event forwarding from devices to SSE clients
     this.setupXL2EventForwarding();
     this.setupGPSEventForwarding();
@@ -241,6 +244,11 @@ class XL2WebServer {
     // Serve SSE test page
     this.app.get('/test-sse', (req, res) => {
       res.sendFile(join(process.cwd(), 'test-sse.html'));
+    });
+
+    // Serve status test page
+    this.app.get('/test-status', (req, res) => {
+      res.sendFile(join(process.cwd(), 'test-status.html'));
     });
 
     // SSE endpoint for real-time events
@@ -493,6 +501,27 @@ class XL2WebServer {
       }
     }, 45000); // Check every 45 seconds (offset from XL2)
     */
+  }
+
+  /**
+   * Setup device status callback for new SSE clients
+   */
+  setupDeviceStatusCallback() {
+    // Set up callback to provide current device status to new clients
+    this.sseService.setDeviceStatusCallback(() => {
+      return {
+        xl2: {
+          connected: this.xl2.isConnected,
+          port: this.xl2.port?.path || null,
+          deviceInfo: this.xl2.deviceInfo || null
+        },
+        gps: {
+          connected: this.gpsLogger.isGPSConnected,
+          port: this.gpsLogger.gpsPort?.path || null,
+          location: this.gpsLogger.getCurrentLocation()
+        }
+      };
+    });
   }
 
   /**

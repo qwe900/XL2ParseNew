@@ -30,7 +30,16 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
     });
   }));
 
-  router.get('/ports', asyncHandler(async (req, res) => {
+  // XL2 specific routes
+  router.get('/xl2/status', asyncHandler(async (req, res) => {
+    const status = xl2.getStatus();
+    res.json({
+      success: true,
+      data: status
+    });
+  }));
+
+  router.get('/xl2/ports', asyncHandler(async (req, res) => {
     const ports = await SerialPort.list();
     res.json({
       success: true,
@@ -38,7 +47,7 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
     });
   }));
 
-  router.get('/scan-devices', asyncHandler(async (req, res) => {
+  router.get('/xl2/scan', asyncHandler(async (req, res) => {
     const devices = await xl2.scanAllPortsForXL2();
     res.json({
       success: true,
@@ -46,8 +55,7 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
     });
   }));
 
-  // Connection management endpoints
-  router.post('/connect', validateRequest.portConnection, asyncHandler(async (req, res) => {
+  router.post('/xl2/connect', validateRequest.portConnection, asyncHandler(async (req, res) => {
     const { port } = req.body;
     const connectedPort = await xl2.connect(port);
     
@@ -58,7 +66,7 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
     });
   }));
 
-  router.post('/disconnect', asyncHandler(async (req, res) => {
+  router.post('/xl2/disconnect', asyncHandler(async (req, res) => {
     await xl2.disconnect();
     
     res.json({
@@ -67,8 +75,7 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
     });
   }));
 
-  // Command endpoints
-  router.post('/command', validateRequest.command, asyncHandler(async (req, res) => {
+  router.post('/xl2/command', validateRequest.command, asyncHandler(async (req, res) => {
     const { command } = req.body;
     await xl2.sendCommand(command);
     
@@ -78,7 +85,8 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
     });
   }));
 
-  router.post('/fft/initialize', asyncHandler(async (req, res) => {
+  // XL2 FFT routes
+  router.post('/xl2/initialize-fft', asyncHandler(async (req, res) => {
     await xl2.initializeFFT();
     
     res.json({
@@ -87,7 +95,25 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
     });
   }));
 
-  router.post('/fft/start-continuous', asyncHandler(async (req, res) => {
+  router.get('/xl2/fft-frequencies', asyncHandler(async (req, res) => {
+    const frequencies = xl2.getFFTFrequencies();
+    
+    res.json({
+      success: true,
+      data: frequencies
+    });
+  }));
+
+  router.get('/xl2/fft-spectrum', asyncHandler(async (req, res) => {
+    const spectrum = xl2.getFFTSpectrum();
+    
+    res.json({
+      success: true,
+      data: spectrum
+    });
+  }));
+
+  router.post('/xl2/start-continuous-fft', asyncHandler(async (req, res) => {
     await xl2.startContinuousFFT();
     
     res.json({
@@ -96,12 +122,41 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
     });
   }));
 
-  router.post('/fft/stop-continuous', asyncHandler(async (req, res) => {
+  router.post('/xl2/stop-continuous-fft', asyncHandler(async (req, res) => {
     await xl2.stopContinuousFFT();
     
     res.json({
       success: true,
       message: 'Continuous FFT stopped'
+    });
+  }));
+
+  router.post('/xl2/set-fft-zoom', validateRequest.zoom, asyncHandler(async (req, res) => {
+    const { zoom } = req.body;
+    await xl2.setFFTZoom(zoom);
+    
+    res.json({
+      success: true,
+      message: `FFT zoom set to ${zoom}`
+    });
+  }));
+
+  router.post('/xl2/set-fft-start', asyncHandler(async (req, res) => {
+    const { frequency } = req.body;
+    await xl2.setFFTStart(frequency);
+    
+    res.json({
+      success: true,
+      message: `FFT start frequency set to ${frequency} Hz`
+    });
+  }));
+
+  router.post('/xl2/trigger-measurement', asyncHandler(async (req, res) => {
+    const measurement = await xl2.triggerMeasurement();
+    
+    res.json({
+      success: true,
+      data: measurement
     });
   }));
 

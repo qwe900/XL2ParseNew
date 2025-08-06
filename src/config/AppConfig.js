@@ -61,7 +61,7 @@ export class AppConfig {
         // Server configuration
         server: {
           port: this._getEnvNumber('PORT', 3000),
-          host: this._getEnvString('HOST', isWindows ? '127.0.0.1' : '0.0.0.0'), // Windows defaults to localhost for security
+          host: this._getEnvString('HOST', isWindows ? '0.0.0.0' : '0.0.0.0'), // Windows defaults to localhost for security
           environment: this._getEnvString('NODE_ENV', 'development')
         },
 
