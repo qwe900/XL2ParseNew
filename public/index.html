@@ -712,6 +712,44 @@
             margin-right: 5px;
             border: 1px solid #ccc;
         }
+
+        /* Current position marker */
+        .current-position-marker {
+            background: #007bff;
+            border: 2px solid white;
+            border-radius: 50%;
+            width: 20px !important;
+            height: 20px !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(0, 123, 255, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(0, 123, 255, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(0, 123, 255, 0); }
+        }
+
+        /* Map button states */
+        .btn.active {
+            background-color: #28a745 !important;
+            border-color: #28a745 !important;
+        }
+
+        .btn.recording {
+            background-color: #dc3545 !important;
+            border-color: #dc3545 !important;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.7; }
+        }
     </style>
 </head>
 <body>
@@ -761,7 +799,7 @@
                 <button onclick="centerMapOnCurrentPosition()" class="btn btn-primary">📍 Center on Position</button>
                 <button onclick="loadCSVMarkers()" class="btn btn-info">📊 Load CSV Data</button>
                 <button onclick="clearMapMarkers()" class="btn btn-warning">🗑️ Clear Markers</button>
-                <button onclick="toggleHeatmap()" class="btn btn-secondary" id="heatmapToggle">🔥 Show Heatmap</button>
+                <button onclick="toggleHeatmap()" class="btn btn-secondary" id="heatmapBtn">🔥 Show Heatmap</button>
                 <button onclick="togglePathRecording()" class="btn btn-success" id="pathToggle">🛤️ Start Path</button>
             </div>
             <div class="map-info">

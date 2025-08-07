@@ -16,6 +16,7 @@ class GPSManager {
         this.totalDistance = 0;
         this.maxSpeed = 0;
         this.lastPosition = null;
+        this.currentDbValue = null;
         
         // Heatmap properties
         this.heatmapLayer = null;
@@ -78,6 +79,19 @@ class GPSManager {
                 this.handleGPSPorts(ports);
             } catch (error) {
                 console.error('Error parsing GPS ports data:', error);
+            }
+        });
+
+        // Listen for XL2 measurements to update current dB value
+        this.eventSource.addEventListener('xl2-measurement', (event) => {
+            try {
+                const measurement = JSON.parse(event.data);
+                if (measurement.dbValue !== undefined) {
+                    this.currentDbValue = measurement.dbValue;
+                    this.updateMapInfo();
+                }
+            } catch (error) {
+                console.error('Error parsing XL2 measurement:', error);
             }
         });
     }
@@ -1269,6 +1283,286 @@ class GPSManager {
         if (this.map && gpsSettings.defaultZoom !== CONFIG.GPS.DEFAULT_ZOOM) {
             this.map.setZoom(gpsSettings.defaultZoom);
         }
+    }
+
+    /**
+     * Center map on current position
+     */
+    centerMapOnCurrentPosition() {
+        if (this.marker && this.map) {
+            const position = this.marker.getLatLng();
+            this.map.setView([position.lat, position.lng], CONFIG.GPS.DEFAULT_ZOOM);
+            ui.showToast('Map centered on current position', 'info');
+        } else {
+            ui.showToast('No current position available', 'warning');
+        }
+    }
+
+    /**
+     * Load markers from CSV data
+     */
+    async loadCSVMarkers() {
+        try {
+            console.log('📊 Loading CSV markers...');
+            ui.showToast('Loading CSV markers...', 'info');
+            
+            // Fetch available CSV files
+            const response = await fetch('/api/csv/files');
+            const data = await response.json();
+            
+            if (!data.success || !data.data || data.data.length === 0) {
+                ui.showToast('No CSV files available', 'warning');
+                return;
+            }
+
+            // For now, load the most recent CSV file
+            const csvFile = data.data[0];
+            console.log(`Loading CSV file: ${csvFile.name}`);
+            
+            // Fetch CSV data
+            const csvResponse = await fetch(`/api/csv/data/${encodeURIComponent(csvFile.name)}`);
+            const csvData = await csvResponse.json();
+            
+            if (!csvData.success) {
+                throw new Error(csvData.error?.message || 'Failed to load CSV data');
+            }
+
+            this.addCSVMarkersToMap(csvData.data);
+            ui.showToast(`Loaded ${csvData.data.length} records from ${csvFile.name}`, 'success');
+            
+        } catch (error) {
+            console.error('❌ Failed to load CSV markers:', error);
+            ui.showToast(`Failed to load CSV markers: ${error.message}`, 'error');
+        }
+    }
+
+    /**
+     * Add CSV markers to map
+     */
+    addCSVMarkersToMap(csvData) {
+        if (!csvData || csvData.length === 0) {
+            console.warn('No CSV data to display');
+            return;
+        }
+
+        let addedMarkers = 0;
+        const bounds = [];
+
+        csvData.forEach(row => {
+            const lat = parseFloat(row.GPS_Latitude);
+            const lon = parseFloat(row.GPS_Longitude);
+            const dbValue = parseFloat(row.Pegel_12_5Hz_dB);
+            
+            if (!isNaN(lat) && !isNaN(lon) && !isNaN(dbValue)) {
+                const position = [lat, lon];
+                bounds.push(position);
+                
+                // Create marker with color based on dB value
+                const color = this.getDbColor(dbValue);
+                const marker = L.circleMarker(position, {
+                    radius: 6,
+                    fillColor: color,
+                    color: '#fff',
+                    weight: 1,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }).addTo(this.map);
+                
+                // Add popup with dB value
+                marker.bindPopup(`${dbValue.toFixed(1)} dB`);
+                
+                // Add to heatmap data
+                this.addDbMeasurement(lat, lon, dbValue);
+                
+                addedMarkers++;
+            }
+        });
+
+        // Fit map to show all markers
+        if (bounds.length > 0) {
+            this.map.fitBounds(bounds, { padding: [20, 20] });
+        }
+
+        console.log(`📊 Added ${addedMarkers} markers from CSV data`);
+        this.updateMapInfo();
+    }
+
+    /**
+     * Get color for dB value
+     */
+    getDbColor(dbValue) {
+        // Color scale from blue (low) to red (high)
+        if (dbValue < 40) return '#0000ff';      // Blue
+        if (dbValue < 50) return '#0080ff';      // Light blue
+        if (dbValue < 60) return '#00ff00';      // Green
+        if (dbValue < 70) return '#80ff00';      // Yellow-green
+        if (dbValue < 80) return '#ffff00';      // Yellow
+        if (dbValue < 90) return '#ff8000';      // Orange
+        return '#ff0000';                        // Red
+    }
+
+    /**
+     * Clear all markers from map
+     */
+    clearMapMarkers() {
+        // Clear track
+        this.clearTrack();
+        
+        // Clear heatmap
+        this.clearHeatmap();
+        
+        // Remove all layers except base layer
+        this.map.eachLayer((layer) => {
+            if (layer !== this.map._layers[Object.keys(this.map._layers)[0]]) {
+                // Don't remove the base tile layer
+                if (!layer._url) {
+                    this.map.removeLayer(layer);
+                }
+            }
+        });
+        
+        // Reset distance and position
+        this.totalDistance = 0;
+        this.lastPosition = null;
+        
+        console.log('🗑️ Cleared all map markers and path');
+        ui.showToast('Map cleared', 'info');
+        this.updateMapInfo();
+    }
+
+    /**
+     * Toggle path recording
+     */
+    togglePathRecording() {
+        this.isTracking = !this.isTracking;
+        const button = document.getElementById('pathToggle');
+        
+        if (this.isTracking) {
+            button.textContent = '⏹️ Stop Path';
+            button.className = 'btn btn-danger recording';
+            console.log('📍 Path recording started');
+            ui.showToast('Path recording started', 'success');
+        } else {
+            button.textContent = '🛤️ Start Path';
+            button.className = 'btn btn-success';
+            console.log('📍 Path recording stopped');
+            ui.showToast('Path recording stopped', 'info');
+        }
+        
+        this.updatePathRecordingStatus();
+    }
+
+    /**
+     * Update path recording status display
+     */
+    updatePathRecordingStatus() {
+        const button = document.getElementById('pathToggle');
+        if (!button) return;
+        
+        if (this.isTracking) {
+            if (this.isLoggingActive()) {
+                button.title = 'Path recording active - recording points';
+                button.className = 'btn btn-danger recording';
+            } else {
+                button.title = 'Path recording enabled - waiting for CSV logging to start';
+                button.className = 'btn btn-warning';
+            }
+        } else {
+            button.title = 'Click to start path recording';
+            button.className = 'btn btn-success';
+        }
+    }
+
+    /**
+     * Check if logging is currently active
+     */
+    isLoggingActive() {
+        // Check if CSV logging is active by looking at the logging status
+        const loggingStatus = document.getElementById('loggingStatus');
+        if (loggingStatus) {
+            const statusText = loggingStatus.textContent.toLowerCase();
+            return statusText.includes('active') || statusText.includes('logging');
+        }
+        
+        // Fallback: check if there's any indication of active logging
+        const loggingElements = document.querySelectorAll('[id*="logging"], [class*="logging"]');
+        for (const element of loggingElements) {
+            const text = element.textContent.toLowerCase();
+            if (text.includes('active') || text.includes('logging')) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    /**
+     * Update map info display
+     */
+    updateMapInfo() {
+        // Update coordinates
+        if (this.currentLocation) {
+            const latElement = document.getElementById('currentLat');
+            const lonElement = document.getElementById('currentLon');
+            const altElement = document.getElementById('currentAlt');
+            
+            if (latElement) latElement.textContent = this.currentLocation.latitude.toFixed(6);
+            if (lonElement) lonElement.textContent = this.currentLocation.longitude.toFixed(6);
+            if (altElement) altElement.textContent = this.currentLocation.altitude ? 
+                this.currentLocation.altitude.toFixed(1) : '--';
+        }
+        
+        // Update path distance
+        const distanceElement = document.getElementById('pathDistance');
+        if (distanceElement) {
+            distanceElement.textContent = this.totalDistance > 1000 ? 
+                (this.totalDistance / 1000).toFixed(2) + ' km' : 
+                Math.round(this.totalDistance) + ' m';
+        }
+        
+        // Update marker count
+        const markerElement = document.getElementById('markerCount');
+        if (markerElement) {
+            markerElement.textContent = this.track.length;
+        }
+        
+        // Update current noise level
+        const noiseElement = document.getElementById('currentNoise');
+        if (noiseElement) {
+            noiseElement.textContent = this.currentDbValue !== null ? 
+                this.currentDbValue.toFixed(1) + ' dB' : '--';
+        }
+    }
+}
+
+// Global functions for button handlers
+function centerMapOnCurrentPosition() {
+    if (window.gpsManager) {
+        window.gpsManager.centerMapOnCurrentPosition();
+    }
+}
+
+function loadCSVMarkers() {
+    if (window.gpsManager) {
+        window.gpsManager.loadCSVMarkers();
+    }
+}
+
+function clearMapMarkers() {
+    if (window.gpsManager) {
+        window.gpsManager.clearMapMarkers();
+    }
+}
+
+function togglePathRecording() {
+    if (window.gpsManager) {
+        window.gpsManager.togglePathRecording();
+    }
+}
+
+function toggleHeatmap() {
+    if (window.gpsManager) {
+        window.gpsManager.toggleHeatmap();
     }
 }
 

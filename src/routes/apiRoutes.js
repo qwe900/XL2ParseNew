@@ -425,6 +425,126 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
     }));
   }
 
+  // CSV data endpoints
+  router.get('/csv/files', asyncHandler(async (req, res) => {
+    const fs = await import('fs');
+    const path = await import('path');
+    
+    const logsDir = path.join(process.cwd(), 'logs');
+    
+    if (!fs.existsSync(logsDir)) {
+      return res.json({
+        success: true,
+        data: []
+      });
+    }
+    
+    const files = fs.readdirSync(logsDir)
+      .filter(file => file.endsWith('.csv'))
+      .map(file => {
+        const filePath = path.join(logsDir, file);
+        const stats = fs.statSync(filePath);
+        return {
+          name: file,
+          path: filePath,
+          size: stats.size,
+          modified: stats.mtime.toISOString(),
+          created: stats.birthtime.toISOString()
+        };
+      })
+      .sort((a, b) => new Date(b.modified) - new Date(a.modified));
+    
+    res.json({
+      success: true,
+      data: files
+    });
+  }));
+
+  router.get('/csv/data/:filename', asyncHandler(async (req, res) => {
+    const fs = await import('fs');
+    const path = await import('path');
+    
+    const filename = decodeURIComponent(req.params.filename);
+    const filePath = path.join(process.cwd(), 'logs', filename);
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'CSV file not found' }
+      });
+    }
+    
+    try {
+      const csvContent = fs.readFileSync(filePath, 'utf8');
+      const lines = csvContent.split('\n').filter(line => line.trim());
+      
+      if (lines.length <= 1) {
+        return res.json({
+          success: true,
+          data: []
+        });
+      }
+      
+      // Parse CSV data
+      const headers = lines[0].split(',').map(h => h.trim());
+      const data = [];
+      
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        const values = line.split(',');
+        const record = {};
+        
+        headers.forEach((header, index) => {
+          if (values[index] !== undefined) {
+            const value = values[index].trim();
+            // Try to parse as number if it looks like one
+            if (!isNaN(value) && value !== '') {
+              record[header] = parseFloat(value);
+            } else {
+              record[header] = value;
+            }
+          }
+        });
+        
+        data.push(record);
+      }
+      
+      res.json({
+        success: true,
+        data: data,
+        meta: {
+          filename: filename,
+          records: data.length,
+          headers: headers
+        }
+      });
+      
+    } catch (error) {
+      logger.error('Error reading CSV file:', error);
+      res.status(500).json({
+        success: false,
+        error: { message: 'Error reading CSV file: ' + error.message }
+      });
+    }
+  }));
+
+  router.get('/csv/path', asyncHandler(async (req, res) => {
+    if (typeof generatePathFromCSV === 'function') {
+      const pathData = generatePathFromCSV();
+      res.json({
+        success: true,
+        data: pathData
+      });
+    } else {
+      res.json({
+        success: false,
+        error: { message: 'CSV path generation not available' }
+      });
+    }
+  }));
+
   // Error handling middleware for API routes
   router.use((error, req, res, next) => {
     logger.error(`API Error: ${req.method} ${req.path}`, {
