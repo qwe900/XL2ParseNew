@@ -4,8 +4,8 @@
  */
 
 class FFTManager {
-    constructor(socket) {
-        this.socket = socket;
+    constructor(eventSource) {
+        this.eventSource = eventSource;
         this.canvas = null;
         this.ctx = null;
         this.frequencies = null;
@@ -20,32 +20,48 @@ class FFTManager {
     }
 
     /**
-     * Setup socket event listeners
+     * Setup SSE event listeners
      */
     setupEventListeners() {
-        // FFT initialization events
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_FFT_INITIALIZED, () => {
-            ui.showToast('FFT mode initialized successfully', 'success');
-            this.getFrequencies();
+        if (!this.eventSource) {
+            console.warn('FFTManager: No EventSource provided');
+            return;
+        }
+
+        // Listen for XL2 measurement events (which include FFT data)
+        this.eventSource.addEventListener('xl2-measurement', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                this.handleMeasurementReceived(data);
+            } catch (error) {
+                console.error('Error parsing XL2 measurement data:', error);
+            }
         });
 
-        // FFT frequency data
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_FFT_FREQUENCIES, (data) => {
-            this.handleFrequenciesReceived(data);
+        // Listen for XL2 FFT frequencies
+        this.eventSource.addEventListener('xl2-fft-frequencies', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                this.handleFrequenciesReceived(data);
+            } catch (error) {
+                console.error('Error parsing XL2 FFT frequencies:', error);
+            }
         });
 
-        // FFT spectrum data
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_FFT_SPECTRUM, (data) => {
-            this.handleSpectrumReceived(data);
+        // Listen for XL2 connection status
+        this.eventSource.addEventListener('xl2-connected', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                console.log('XL2 connected, FFT ready');
+                ui.showToast('XL2 connected - FFT ready', 'success');
+            } catch (error) {
+                console.error('Error parsing XL2 connection data:', error);
+            }
         });
 
-        // Continuous FFT events
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_CONTINUOUS_FFT_STARTED, () => {
-            this.handleContinuousStarted();
-        });
-
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_CONTINUOUS_FFT_STOPPED, () => {
-            this.handleContinuousStopped();
+        // Listen for XL2 disconnection
+        this.eventSource.addEventListener('xl2-disconnected', (event) => {
+            this.handleXL2Disconnected();
         });
     }
 
@@ -158,13 +174,23 @@ class FFTManager {
     /**
      * Initialize FFT mode on device
      */
-    initializeFFT() {
+    async initializeFFT() {
         try {
             ui.showToast('Initializing FFT mode...', 'info');
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_INITIALIZE_FFT);
             
-            // Update status
-            this.updateStatus('Initializing FFT...');
+            const response = await fetch('/api/xl2/initialize-fft', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                ui.showToast('FFT mode initialized successfully', 'success');
+                this.updateStatus('FFT initialized');
+            } else {
+                throw new Error(result.error?.message || 'Failed to initialize FFT');
+            }
             
         } catch (error) {
             console.error('Error initializing FFT:', error);
@@ -175,9 +201,16 @@ class FFTManager {
     /**
      * Get FFT frequencies from device
      */
-    getFrequencies() {
+    async getFrequencies() {
         try {
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_GET_FFT_FREQUENCIES);
+            const response = await fetch('/api/xl2/fft-frequencies');
+            const result = await response.json();
+            
+            if (result.success && result.data) {
+                this.handleFrequenciesReceived(result.data);
+            } else {
+                throw new Error(result.error?.message || 'Failed to get frequencies');
+            }
         } catch (error) {
             console.error('Error getting FFT frequencies:', error);
             ui.showToast('Error getting FFT frequencies', 'error');
@@ -187,9 +220,16 @@ class FFTManager {
     /**
      * Get FFT spectrum from device
      */
-    getSpectrum() {
+    async getSpectrum() {
         try {
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_GET_FFT_SPECTRUM);
+            const response = await fetch('/api/xl2/fft-spectrum');
+            const result = await response.json();
+            
+            if (result.success && result.data) {
+                this.handleSpectrumReceived(result.data);
+            } else {
+                throw new Error(result.error?.message || 'Failed to get spectrum');
+            }
         } catch (error) {
             console.error('Error getting FFT spectrum:', error);
             ui.showToast('Error getting FFT spectrum', 'error');
@@ -199,10 +239,22 @@ class FFTManager {
     /**
      * Start continuous FFT measurements
      */
-    startContinuous() {
+    async startContinuous() {
         try {
             ui.setButtonLoading('startFFTBtn', true, '▶️ Starting...');
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_START_CONTINUOUS_FFT);
+            
+            const response = await fetch('/api/xl2/start-continuous-fft', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                this.handleContinuousStarted();
+            } else {
+                throw new Error(result.error?.message || 'Failed to start continuous FFT');
+            }
         } catch (error) {
             console.error('Error starting continuous FFT:', error);
             ui.showToast('Error starting continuous FFT', 'error');
@@ -213,10 +265,22 @@ class FFTManager {
     /**
      * Stop continuous FFT measurements
      */
-    stopContinuous() {
+    async stopContinuous() {
         try {
             ui.setButtonLoading('stopFFTBtn', true, '⏹️ Stopping...');
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_STOP_CONTINUOUS_FFT);
+            
+            const response = await fetch('/api/xl2/stop-continuous-fft', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                this.handleContinuousStopped();
+            } else {
+                throw new Error(result.error?.message || 'Failed to stop continuous FFT');
+            }
         } catch (error) {
             console.error('Error stopping continuous FFT:', error);
             ui.showToast('Error stopping continuous FFT', 'error');
@@ -227,7 +291,7 @@ class FFTManager {
     /**
      * Set FFT zoom level
      */
-    setZoom(zoom = null) {
+    async setZoom(zoom = null) {
         try {
             const zoomValue = zoom !== null ? zoom : this.getZoomFromInput();
             
@@ -235,11 +299,23 @@ class FFTManager {
             const validatedZoom = Utils.validateZoom(zoomValue);
             
             ui.showToast(`Setting FFT zoom to ${validatedZoom}...`, 'info');
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_SET_FFT_ZOOM, validatedZoom);
             
-            // Save to settings
-            if (settings) {
-                settings.set('fft', 'zoom', validatedZoom);
+            const response = await fetch('/api/xl2/set-fft-zoom', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ zoom: validatedZoom })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                ui.showToast(`FFT zoom set to ${validatedZoom}`, 'success');
+                // Save to settings
+                if (settings) {
+                    settings.set('fft', 'zoom', validatedZoom);
+                }
+            } else {
+                throw new Error(result.error?.message || 'Failed to set zoom');
             }
             
         } catch (error) {
@@ -252,7 +328,7 @@ class FFTManager {
     /**
      * Set FFT start frequency
      */
-    setStartFrequency(fstart = null) {
+    async setStartFrequency(fstart = null) {
         try {
             const fstartValue = fstart !== null ? fstart : this.getStartFrequencyFromInput();
             
@@ -260,11 +336,23 @@ class FFTManager {
             const validatedFstart = Utils.validateFrequency(fstartValue);
             
             ui.showToast(`Setting FFT start frequency to ${validatedFstart} Hz...`, 'info');
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_SET_FFT_START, validatedFstart);
             
-            // Save to settings
-            if (settings) {
-                settings.set('fft', 'fstart', validatedFstart);
+            const response = await fetch('/api/xl2/set-fft-start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fstart: validatedFstart })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                ui.showToast(`FFT start frequency set to ${validatedFstart} Hz`, 'success');
+                // Save to settings
+                if (settings) {
+                    settings.set('fft', 'fstart', validatedFstart);
+                }
+            } else {
+                throw new Error(result.error?.message || 'Failed to set start frequency');
             }
             
         } catch (error) {
@@ -277,10 +365,20 @@ class FFTManager {
     /**
      * Trigger single measurement
      */
-    triggerMeasurement() {
+    async triggerMeasurement() {
         try {
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_TRIGGER_MEASUREMENT);
-            ui.showToast('Measurement triggered', 'info');
+            const response = await fetch('/api/xl2/trigger-measurement', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                ui.showToast('Measurement triggered', 'success');
+            } else {
+                throw new Error(result.error?.message || 'Failed to trigger measurement');
+            }
         } catch (error) {
             console.error('Error triggering measurement:', error);
             ui.showToast('Error triggering measurement', 'error');
@@ -307,6 +405,41 @@ class FFTManager {
             throw new Error('Please enter a start frequency');
         }
         return parseFloat(input.value);
+    }
+
+    /**
+     * Handle measurement data from SSE (includes FFT spectrum)
+     */
+    handleMeasurementReceived(data) {
+        if (data.type === 'fft_spectrum' && data.spectrum) {
+            // This is FFT spectrum data
+            this.handleSpectrumReceived({
+                spectrum: data.spectrum,
+                hz12_5_index: data.hz12_5_index,
+                hz12_5_value: data.hz12_5_dB,
+                hz12_5_frequency: data.hz12_5_frequency
+            });
+        }
+    }
+
+    /**
+     * Handle XL2 disconnection
+     */
+    handleXL2Disconnected() {
+        this.isRunning = false;
+        this.frequencies = null;
+        this.lastSpectrum = null;
+        
+        // Update UI
+        const startBtn = document.getElementById('startFFTBtn');
+        const stopBtn = document.getElementById('stopFFTBtn');
+        
+        if (startBtn) startBtn.disabled = true;
+        if (stopBtn) stopBtn.disabled = true;
+        
+        this.updateStatus('XL2 disconnected', 'error');
+        this.drawInitialState();
+        ui.showToast('XL2 disconnected - FFT unavailable', 'warning');
     }
 
     /**

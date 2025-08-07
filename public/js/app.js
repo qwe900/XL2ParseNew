@@ -5,7 +5,7 @@
 
 class XL2Application {
     constructor() {
-        this.socket = null;
+        this.eventSource = null;
         this.connectionManager = null;
         this.fftManager = null;
         this.gpsManager = null;
@@ -32,8 +32,8 @@ class XL2Application {
             // Log system information
             Utils.logSystemInfo();
             
-            // Initialize socket connection
-            await this.initializeSocket();
+            // Initialize SSE connection
+            await this.initializeSSE();
             
             // Initialize managers
             this.initializeManagers();
@@ -60,88 +60,226 @@ class XL2Application {
     }
 
     /**
-     * Initialize socket connection
+     * Initialize SSE connection
      */
-    async initializeSocket() {
+    async initializeSSE() {
         try {
-            // Check if Socket.IO is available
-            if (typeof io === 'undefined') {
-                throw new Error('Socket.IO library not loaded');
-            }
-
-            // Initialize socket
-            this.socket = io();
+            console.log('📡 Initializing SSE connection...');
             
-            // Setup basic socket event handlers
-            this.setupSocketEventHandlers();
+            // Initialize Server-Sent Events
+            this.eventSource = new EventSource('/events');
             
-            // Wait for connection
-            await this.waitForSocketConnection();
+            // Wait for connection first, then setup handlers
+            await this.waitForSSEConnection();
             
-            console.log('✅ Socket connection established');
+            // Setup additional SSE event handlers
+            this.setupSSEEventHandlers();
+            
+            console.log('✅ SSE connection established');
             
         } catch (error) {
-            console.error('❌ Socket initialization failed:', error);
+            console.error('❌ SSE initialization failed:', error);
             throw error;
         }
     }
 
     /**
-     * Setup basic socket event handlers
+     * Setup additional SSE event handlers
      */
-    setupSocketEventHandlers() {
-        this.socket.on('connect', () => {
-            console.log('🔌 Socket connected:', this.socket.id);
-            ui.showToast('Connected to server', 'success');
-            
-            // Server will automatically send current status to new clients
-            // Do NOT trigger any device operations here to avoid interfering with ongoing measurements
+    setupSSEEventHandlers() {
+        // Handle generic messages
+        this.eventSource.onmessage = (event) => {
+            console.log('📡 SSE message:', event.data);
+        };
+
+        // Handle specific event types
+        this.eventSource.addEventListener('connected', (event) => {
+            const data = JSON.parse(event.data);
+            console.log('📡 SSE connected with client ID:', data.clientId);
         });
 
-        this.socket.on('disconnect', (reason) => {
-            console.log('🔌 Socket disconnected:', reason);
-            ui.showToast('Disconnected from server', 'warning');
+        this.eventSource.addEventListener('ping', (event) => {
+            const data = JSON.parse(event.data);
+            console.debug('📡 SSE ping:', data.timestamp);
         });
 
-        this.socket.on('connect_error', (error) => {
-            console.error('🔌 Socket connection error:', error);
-            ui.showToast('Connection error: ' + error.message, 'error');
-        });
-
-        this.socket.on('reconnect', (attemptNumber) => {
-            console.log('🔌 Socket reconnected after', attemptNumber, 'attempts');
-            ui.showToast('Reconnected to server', 'success');
-        });
-
-        this.socket.on('reconnect_error', (error) => {
-            console.error('🔌 Socket reconnection error:', error);
-        });
+        // Handle connection errors after initial connection
+        this.eventSource.onerror = (error) => {
+            console.error('📡 SSE connection error:', error);
+            if (this.eventSource.readyState === EventSource.CLOSED) {
+                console.warn('📡 SSE connection closed, attempting to reconnect...');
+                ui.showToast('Connection lost, reconnecting...', 'warning');
+                this.reconnectSSE();
+            }
+        };
     }
 
     /**
-     * Wait for socket connection
+     * Wait for SSE connection
      */
-    waitForSocketConnection() {
+    waitForSSEConnection() {
         return new Promise((resolve, reject) => {
-            if (this.socket.connected) {
+            console.log('📡 Waiting for SSE connection...');
+            
+            // Check if already connected
+            if (this.eventSource.readyState === EventSource.OPEN) {
+                console.log('📡 SSE already connected');
                 resolve();
                 return;
             }
 
+            // Check if connection failed
+            if (this.eventSource.readyState === EventSource.CLOSED) {
+                reject(new Error('SSE connection closed'));
+                return;
+            }
+
+            let resolved = false;
+            let connectionCheckInterval;
+            
             const timeout = setTimeout(() => {
-                reject(new Error('Socket connection timeout'));
-            }, 10000);
+                if (!resolved) {
+                    resolved = true;
+                    clearInterval(connectionCheckInterval);
+                    this.eventSource.removeEventListener('open', handleOpen);
+                    this.eventSource.removeEventListener('error', handleError);
+                    this.eventSource.removeEventListener('message', handleFirstMessage);
+                    this.eventSource.removeEventListener('connected', handleConnectedEvent);
+                    reject(new Error('SSE connection timeout'));
+                }
+            }, 15000); // Increased timeout to 15 seconds
 
-            this.socket.once('connect', () => {
-                clearTimeout(timeout);
-                resolve();
-            });
+            const handleOpen = () => {
+                console.log('📡 SSE open event received');
+                if (!resolved) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    clearInterval(connectionCheckInterval);
+                    this.eventSource.removeEventListener('open', handleOpen);
+                    this.eventSource.removeEventListener('error', handleError);
+                    this.eventSource.removeEventListener('message', handleFirstMessage);
+                    this.eventSource.removeEventListener('connected', handleConnectedEvent);
+                    ui.showToast('Connected to server', 'success');
+                    resolve();
+                }
+            };
 
-            this.socket.once('connect_error', (error) => {
-                clearTimeout(timeout);
-                reject(error);
-            });
+            const handleError = (error) => {
+                console.error('📡 SSE error during connection:', error);
+                if (!resolved && this.eventSource.readyState === EventSource.CLOSED) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    clearInterval(connectionCheckInterval);
+                    this.eventSource.removeEventListener('open', handleOpen);
+                    this.eventSource.removeEventListener('error', handleError);
+                    this.eventSource.removeEventListener('message', handleFirstMessage);
+                    this.eventSource.removeEventListener('connected', handleConnectedEvent);
+                    reject(new Error('SSE connection error: ' + (error.message || 'Connection failed')));
+                }
+            };
+
+            // Listen for the first message as a fallback connection indicator
+            const handleFirstMessage = (event) => {
+                console.log('📡 SSE first message received:', event.data);
+                if (!resolved) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    clearInterval(connectionCheckInterval);
+                    this.eventSource.removeEventListener('open', handleOpen);
+                    this.eventSource.removeEventListener('error', handleError);
+                    this.eventSource.removeEventListener('message', handleFirstMessage);
+                    this.eventSource.removeEventListener('connected', handleConnectedEvent);
+                    ui.showToast('Connected to server', 'success');
+                    resolve();
+                }
+            };
+
+            // Listen for the 'connected' event specifically
+            const handleConnectedEvent = (event) => {
+                console.log('📡 SSE connected event received:', event.data);
+                if (!resolved) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    clearInterval(connectionCheckInterval);
+                    this.eventSource.removeEventListener('open', handleOpen);
+                    this.eventSource.removeEventListener('error', handleError);
+                    this.eventSource.removeEventListener('message', handleFirstMessage);
+                    this.eventSource.removeEventListener('connected', handleConnectedEvent);
+                    ui.showToast('Connected to server', 'success');
+                    resolve();
+                }
+            };
+
+            // Add event listeners for connection state changes
+            this.eventSource.addEventListener('open', handleOpen);
+            this.eventSource.addEventListener('error', handleError);
+            this.eventSource.addEventListener('message', handleFirstMessage);
+            this.eventSource.addEventListener('connected', handleConnectedEvent);
+            
+            // Periodically check connection state as a fallback
+            connectionCheckInterval = setInterval(() => {
+                console.log(`📡 SSE readyState check: ${this.eventSource.readyState} (CONNECTING: ${EventSource.CONNECTING}, OPEN: ${EventSource.OPEN}, CLOSED: ${EventSource.CLOSED})`);
+                
+                if (this.eventSource.readyState === EventSource.OPEN && !resolved) {
+                    console.log('📡 SSE connection detected via state check');
+                    resolved = true;
+                    clearTimeout(timeout);
+                    clearInterval(connectionCheckInterval);
+                    this.eventSource.removeEventListener('open', handleOpen);
+                    this.eventSource.removeEventListener('error', handleError);
+                    this.eventSource.removeEventListener('message', handleFirstMessage);
+                    this.eventSource.removeEventListener('connected', handleConnectedEvent);
+                    ui.showToast('Connected to server', 'success');
+                    resolve();
+                }
+            }, 1000); // Check every second
+            
+            console.log(`📡 Initial SSE readyState: ${this.eventSource.readyState} (CONNECTING: ${EventSource.CONNECTING}, OPEN: ${EventSource.OPEN}, CLOSED: ${EventSource.CLOSED})`);
         });
+    }
+
+    /**
+     * Reconnect SSE connection
+     */
+    async reconnectSSE() {
+        try {
+            console.log('📡 Attempting SSE reconnection...');
+            
+            // Close existing connection
+            if (this.eventSource) {
+                this.eventSource.close();
+            }
+            
+            // Wait a bit before reconnecting
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Reinitialize SSE
+            await this.initializeSSE();
+            
+            // Reinitialize managers with new event source
+            if (this.connectionManager) {
+                this.connectionManager.updateEventSource(this.eventSource);
+            }
+            if (this.fftManager) {
+                this.fftManager.updateEventSource(this.eventSource);
+            }
+            if (this.gpsManager) {
+                this.gpsManager.updateEventSource(this.eventSource);
+            }
+            if (this.deviceDetectionManager) {
+                this.deviceDetectionManager.updateEventSource(this.eventSource);
+            }
+            
+            console.log('✅ SSE reconnection successful');
+            ui.showToast('Reconnected to server', 'success');
+            
+        } catch (error) {
+            console.error('❌ SSE reconnection failed:', error);
+            ui.showToast('Reconnection failed', 'error');
+            
+            // Try again after a longer delay
+            setTimeout(() => this.reconnectSSE(), 5000);
+        }
     }
 
     /**
@@ -154,27 +292,28 @@ class XL2Application {
             console.log('✅ Console Manager initialized');
 
             // Initialize connection manager
-            this.connectionManager = new ConnectionManager(this.socket);
+            this.connectionManager = new ConnectionManager(this.eventSource);
             console.log('✅ Connection Manager initialized');
 
             // Initialize FFT manager
-            this.fftManager = new FFTManager(this.socket);
+            this.fftManager = new FFTManager(this.eventSource);
             console.log('✅ FFT Manager initialized');
 
             // Initialize GPS manager
-            this.gpsManager = new GPSManager(this.socket);
+            this.gpsManager = new GPSManager(this.eventSource);
             console.log('✅ GPS Manager initialized');
 
-            // Initialize system performance manager
-            this.systemPerformanceManager = new SystemPerformanceManager(this.socket);
-            console.log('✅ System Performance Manager initialized');
+            // Initialize device detection manager
+            this.deviceDetectionManager = new DeviceDetectionManager();
+            this.deviceDetectionManager.initialize(this.eventSource);
+            console.log('✅ Device Detection Manager initialized');
 
             // Make managers globally available for backward compatibility
             window.connectionManager = this.connectionManager;
             window.fftManager = this.fftManager;
             window.gpsManager = this.gpsManager;
             window.consoleManager = this.consoleManager;
-            window.systemPerformanceManager = this.systemPerformanceManager;
+            window.deviceDetectionManager = this.deviceDetectionManager;
 
         } catch (error) {
             console.error('❌ Manager initialization failed:', error);
@@ -286,6 +425,12 @@ class XL2Application {
 
             // Mark as initialized
             this.isInitialized = true;
+            
+            // Initialize logging status
+            updateLoggingStatus();
+            
+            // Setup periodic logging status updates (every 30 seconds)
+            setInterval(updateLoggingStatus, 30000);
             
             // Log initialization time
             const initTime = Date.now() - this.startTime;
@@ -622,17 +767,12 @@ class XL2Application {
 
     /**
      * Request current status from server
-     * DISABLED: Server automatically sends status updates to avoid interfering with measurements
      */
-    requestCurrentStatus() {
+    async requestCurrentStatus() {
         try {
-            // DISABLED: Don't request status to avoid interfering with ongoing measurements
-            // Server automatically sends current state to clients when they connect
-            console.log('🔄 Status requests disabled - server manages status automatically');
-            // if (this.socket && this.socket.connected) {
-            //     this.socket.emit(CONFIG.SOCKET_EVENTS.REQUEST_CURRENT_STATUS);
-            //     console.log('🔄 Requested current status from server');
-            // }
+            if (this.connectionManager) {
+                await this.connectionManager.requestCurrentStatus();
+            }
         } catch (error) {
             console.error('❌ Failed to request current status:', error);
         }
@@ -784,9 +924,9 @@ For more information, see the README.md file.
         return {
             initialized: this.isInitialized,
             uptime: Date.now() - this.startTime,
-            socket: {
-                connected: this.socket ? this.socket.connected : false,
-                id: this.socket ? this.socket.id : null
+            eventSource: {
+                connected: this.eventSource ? this.eventSource.readyState === EventSource.OPEN : false,
+                readyState: this.eventSource ? this.eventSource.readyState : null
             },
             managers: {
                 connection: this.connectionManager ? this.connectionManager.getStatus() : null,
@@ -812,11 +952,10 @@ For more information, see the README.md file.
                 this.consoleManager.destroy();
             }
 
-            // DISABLED: Don't disconnect socket to avoid triggering cleanup
-            // Let the browser handle socket cleanup naturally
-            // if (this.socket) {
-            //     this.socket.disconnect();
-            // }
+            // Close SSE connection
+            if (this.eventSource) {
+                this.eventSource.close();
+            }
 
             // Remove event listeners
             window.removeEventListener('load', this.handleWindowLoad);
@@ -845,11 +984,7 @@ function disconnect() {
     }
 }
 
-function refreshPorts() {
-    if (window.app && window.app.connectionManager) {
-        return window.app.connectionManager.refreshPorts();
-    }
-}
+// refreshPorts function removed - server manages ports automatically
 
 function refreshStatus() {
     // Server manages status updates automatically
@@ -857,11 +992,7 @@ function refreshStatus() {
     console.log('📊 Status refresh requested - server handles this automatically');
 }
 
-function scanForDevices() {
-    if (window.app && window.app.connectionManager) {
-        return window.app.connectionManager.scanForDevices();
-    }
-}
+// scanForDevices function removed - server manages device detection automatically
 
 function sendCommand(command) {
     if (window.app && window.app.connectionManager) {
@@ -887,17 +1018,6 @@ function initializeFFT() {
     }
 }
 
-function getFFTFrequencies() {
-    if (window.app && window.app.fftManager) {
-        return window.app.fftManager.getFrequencies();
-    }
-}
-
-function getFFTSpectrum() {
-    if (window.app && window.app.fftManager) {
-        return window.app.fftManager.getSpectrum();
-    }
-}
 
 function setFFTZoom() {
     if (window.app && window.app.fftManager) {
@@ -923,11 +1043,7 @@ function stopContinuousFFT() {
     }
 }
 
-function triggerMeasurement() {
-    if (window.app && window.app.fftManager) {
-        return window.app.fftManager.triggerMeasurement();
-    }
-}
+// triggerMeasurement function removed - not implemented in API
 
 function drawTestSpectrum() {
     if (window.app && window.app.fftManager) {
@@ -935,15 +1051,31 @@ function drawTestSpectrum() {
     }
 }
 
-function forceCanvasTest() {
-    if (window.app && window.app.fftManager) {
-        return window.app.fftManager.forceCanvasTest();
-    }
-}
+// forceCanvasTest function removed - not implemented in API
 
-function setFrequency(freq) {
-    if (window.app && window.app.connectionManager) {
-        return window.app.connectionManager.sendCommand(`FREQ ${freq}`);
+// setFrequency function updated to use correct API endpoint
+async function setFrequency(freq) {
+    try {
+        const response = await fetch('/api/frequency', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ frequency: freq })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error?.message || 'Failed to set frequency');
+        }
+
+        const result = await response.json();
+        ui.showToast(`Frequency context set to ${freq} Hz`, 'success');
+        return result;
+    } catch (error) {
+        console.error('Error setting frequency:', error);
+        ui.showToast('Failed to set frequency', 'error');
+        return false;
     }
 }
 
@@ -994,17 +1126,9 @@ function toggleHeatmapVisibility() {
     return toggleHeatmap();
 }
 
-function recalculateHeatmapData() {
-    if (window.app && window.app.gpsManager) {
-        return window.app.gpsManager.recalculateHeatmapData();
-    }
-}
+// recalculateHeatmapData function removed - not implemented in API
 
-function testHeatmap() {
-    if (window.app && window.app.gpsManager) {
-        return window.app.gpsManager.testHeatmap();
-    }
-}
+// testHeatmap function removed - not implemented in API
 
 function clearHeatmap() {
     if (window.app && window.app.gpsManager) {
@@ -1018,16 +1142,127 @@ function loadCSVData() {
     }
 }
 
-// Logging functions
-function startLogging() {
-    if (window.app && window.app.socket) {
-        window.app.socket.emit(CONFIG.SOCKET_EVENTS.LOGGING_START);
+// Logging functions - Fixed to use correct API endpoints
+async function startLogging() {
+    try {
+        const response = await fetch('/api/logging/start', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error?.message || 'Failed to start logging');
+        }
+
+        const result = await response.json();
+        ui.showToast('Logging started', 'success');
+        
+        // Update logging status immediately
+        updateLoggingStatus();
+        
+        return result;
+    } catch (error) {
+        console.error('Error starting logging:', error);
+        ui.showToast('Failed to start logging', 'error');
+        return false;
     }
 }
 
-function stopLogging() {
-    if (window.app && window.app.socket) {
-        window.app.socket.emit(CONFIG.SOCKET_EVENTS.LOGGING_STOP);
+async function stopLogging() {
+    try {
+        const response = await fetch('/api/logging/stop', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error?.message || 'Failed to stop logging');
+        }
+
+        const result = await response.json();
+        ui.showToast('Logging stopped', 'success');
+        
+        // Update logging status immediately
+        updateLoggingStatus();
+        
+        return result;
+    } catch (error) {
+        console.error('Error stopping logging:', error);
+        ui.showToast('Failed to stop logging', 'error');
+        return false;
+    }
+}
+
+// Function to update logging status display
+async function updateLoggingStatus() {
+    try {
+        const response = await fetch('/api/xl2/status');
+        if (!response.ok) {
+            throw new Error('Failed to fetch status');
+        }
+        
+        const result = await response.json();
+        const isLogging = result.data.isLogging;
+        const loggingInfo = result.data.loggingInfo;
+        
+        // Update both status displays
+        const statusElements = [
+            { status: document.getElementById('loggingStatus'), text: document.getElementById('loggingStatusText') },
+            { status: document.getElementById('loggingStatus2'), text: document.getElementById('loggingStatusText2') }
+        ];
+        
+        statusElements.forEach(({ status, text }) => {
+            if (status && text) {
+                if (isLogging) {
+                    status.className = 'alert alert-success';
+                    const startTime = loggingInfo.startTime ? new Date(loggingInfo.startTime).toLocaleTimeString() : 'Unknown';
+                    text.textContent = `🟢 Logging Active (Started: ${startTime})`;
+                } else {
+                    status.className = 'alert alert-secondary';
+                    text.textContent = '⚪ Logging Inactive';
+                }
+            }
+        });
+        
+        // Update button states
+        const startButtons = [document.getElementById('startLogBtn'), document.getElementById('startLogBtn2')];
+        const stopButtons = [document.getElementById('stopLogBtn'), document.getElementById('stopLogBtn2')];
+        
+        startButtons.forEach(btn => {
+            if (btn) {
+                btn.disabled = isLogging;
+                btn.className = isLogging ? 'btn btn-success disabled' : 'btn btn-success';
+            }
+        });
+        
+        stopButtons.forEach(btn => {
+            if (btn) {
+                btn.disabled = !isLogging;
+                btn.className = !isLogging ? 'btn btn-warning disabled' : 'btn btn-warning';
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error updating logging status:', error);
+        
+        // Show error state
+        const statusElements = [
+            { status: document.getElementById('loggingStatus'), text: document.getElementById('loggingStatusText') },
+            { status: document.getElementById('loggingStatus2'), text: document.getElementById('loggingStatusText2') }
+        ];
+        
+        statusElements.forEach(({ status, text }) => {
+            if (status && text) {
+                status.className = 'alert alert-danger';
+                text.textContent = '❌ Status Check Failed';
+            }
+        });
     }
 }
 

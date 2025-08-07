@@ -15,9 +15,10 @@ import { validateRequest } from '../utils/validation.js';
  * @param {Object} xl2 - XL2Connection instance
  * @param {Object} gpsLogger - GPSLogger instance
  * @param {Function} generatePathFromCSV - CSV data generator function
+ * @param {Object} startupService - StartupService instance (optional)
  * @returns {express.Router} Express router
  */
-export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
+export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupService = null) {
   const router = express.Router();
 
   // Device status endpoints
@@ -29,7 +30,22 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
     });
   }));
 
-  router.get('/ports', asyncHandler(async (req, res) => {
+  // XL2 specific routes
+  router.get('/xl2/status', asyncHandler(async (req, res) => {
+    const status = xl2.getStatus();
+    const gpsStatus = gpsLogger.getStatus();
+    
+    // Add logging status to XL2 status
+    status.isLogging = gpsStatus.logging.active;
+    status.loggingInfo = gpsStatus.logging;
+    
+    res.json({
+      success: true,
+      data: status
+    });
+  }));
+
+  router.get('/xl2/ports', asyncHandler(async (req, res) => {
     const ports = await SerialPort.list();
     res.json({
       success: true,
@@ -37,7 +53,7 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
     });
   }));
 
-  router.get('/scan-devices', asyncHandler(async (req, res) => {
+  router.get('/xl2/scan', asyncHandler(async (req, res) => {
     const devices = await xl2.scanAllPortsForXL2();
     res.json({
       success: true,
@@ -45,8 +61,7 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
     });
   }));
 
-  // Connection management endpoints
-  router.post('/connect', validateRequest.portConnection, asyncHandler(async (req, res) => {
+  router.post('/xl2/connect', validateRequest.portConnection, asyncHandler(async (req, res) => {
     const { port } = req.body;
     const connectedPort = await xl2.connect(port);
     
@@ -57,7 +72,7 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
     });
   }));
 
-  router.post('/disconnect', asyncHandler(async (req, res) => {
+  router.post('/xl2/disconnect', asyncHandler(async (req, res) => {
     await xl2.disconnect();
     
     res.json({
@@ -66,8 +81,7 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
     });
   }));
 
-  // Command endpoints
-  router.post('/command', validateRequest.command, asyncHandler(async (req, res) => {
+  router.post('/xl2/command', validateRequest.command, asyncHandler(async (req, res) => {
     const { command } = req.body;
     await xl2.sendCommand(command);
     
@@ -77,7 +91,8 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
     });
   }));
 
-  router.post('/fft/initialize', asyncHandler(async (req, res) => {
+  // XL2 FFT routes
+  router.post('/xl2/initialize-fft', asyncHandler(async (req, res) => {
     await xl2.initializeFFT();
     
     res.json({
@@ -86,7 +101,25 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
     });
   }));
 
-  router.post('/fft/start-continuous', asyncHandler(async (req, res) => {
+  router.get('/xl2/fft-frequencies', asyncHandler(async (req, res) => {
+    const frequencies = xl2.getStoredFFTFrequencies();
+    
+    res.json({
+      success: true,
+      data: frequencies
+    });
+  }));
+
+  router.get('/xl2/fft-spectrum', asyncHandler(async (req, res) => {
+    const spectrum = xl2.getFFTSpectrum();
+    
+    res.json({
+      success: true,
+      data: spectrum
+    });
+  }));
+
+  router.post('/xl2/start-continuous-fft', asyncHandler(async (req, res) => {
     await xl2.startContinuousFFT();
     
     res.json({
@@ -95,12 +128,41 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
     });
   }));
 
-  router.post('/fft/stop-continuous', asyncHandler(async (req, res) => {
+  router.post('/xl2/stop-continuous-fft', asyncHandler(async (req, res) => {
     await xl2.stopContinuousFFT();
     
     res.json({
       success: true,
       message: 'Continuous FFT stopped'
+    });
+  }));
+
+  router.post('/xl2/set-fft-zoom', validateRequest.zoom, asyncHandler(async (req, res) => {
+    const { zoom } = req.body;
+    await xl2.setFFTZoom(zoom);
+    
+    res.json({
+      success: true,
+      message: `FFT zoom set to ${zoom}`
+    });
+  }));
+
+  router.post('/xl2/set-fft-start', asyncHandler(async (req, res) => {
+    const { frequency } = req.body;
+    await xl2.setFFTStart(frequency);
+    
+    res.json({
+      success: true,
+      message: `FFT start frequency set to ${frequency} Hz`
+    });
+  }));
+
+  router.post('/xl2/trigger-measurement', asyncHandler(async (req, res) => {
+    const measurement = await xl2.triggerMeasurement();
+    
+    res.json({
+      success: true,
+      data: measurement
     });
   }));
 
@@ -166,7 +228,7 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
     });
   }));
 
-  router.get('/gps/scan', asyncHandler(async (req, res) => {
+  router.post('/gps/scan', asyncHandler(async (req, res) => {
     const gpsPorts = await gpsLogger.scanForGPS();
     
     res.json({
@@ -279,6 +341,208 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV) {
       success: true,
       data: systemInfo
     });
+  }));
+
+  // Device Management endpoints (if startup service is available)
+  if (startupService) {
+    // Get startup status and results
+    router.get('/startup/status', asyncHandler(async (req, res) => {
+      const startupResults = startupService.getStartupResults();
+      const isComplete = startupService.isStartupCompleted();
+      
+      res.json({
+        success: true,
+        data: {
+          isComplete,
+          results: startupResults
+        }
+      });
+    }));
+
+    // Get detected devices
+    router.get('/devices/detected', asyncHandler(async (req, res) => {
+      const deviceManager = startupService.getDeviceManager();
+      const allDevices = deviceManager.getAllDetectedDevices();
+      const scanSummary = deviceManager.getScanSummary();
+      
+      res.json({
+        success: true,
+        data: {
+          devices: allDevices,
+          summary: scanSummary
+        }
+      });
+    }));
+
+    // Rescan devices
+    router.post('/devices/rescan', asyncHandler(async (req, res) => {
+      logger.info('API device rescan requested');
+      const scanResults = await startupService.rescanDevices();
+      
+      res.json({
+        success: true,
+        data: scanResults,
+        message: 'Device rescan completed'
+      });
+    }));
+
+    // Reconnect devices
+    router.post('/devices/reconnect', asyncHandler(async (req, res) => {
+      logger.info('API device reconnection requested');
+      const reconnectResults = await startupService.reconnectDevices();
+      
+      res.json({
+        success: true,
+        data: reconnectResults,
+        message: 'Device reconnection completed'
+      });
+    }));
+
+    // Get device scan summary
+    router.get('/devices/scan-summary', asyncHandler(async (req, res) => {
+      const deviceManager = startupService.getDeviceManager();
+      const scanSummary = deviceManager.getScanSummary();
+      
+      res.json({
+        success: true,
+        data: scanSummary
+      });
+    }));
+
+    // Get best detected devices
+    router.get('/devices/best', asyncHandler(async (req, res) => {
+      const deviceManager = startupService.getDeviceManager();
+      const bestXL2 = deviceManager.getBestXL2Device();
+      const bestGPS = deviceManager.getBestGPSDevice();
+      
+      res.json({
+        success: true,
+        data: {
+          xl2: bestXL2,
+          gps: bestGPS
+        }
+      });
+    }));
+  }
+
+  // CSV data endpoints
+  router.get('/csv/files', asyncHandler(async (req, res) => {
+    const fs = await import('fs');
+    const path = await import('path');
+    
+    const logsDir = path.join(process.cwd(), 'logs');
+    
+    if (!fs.existsSync(logsDir)) {
+      return res.json({
+        success: true,
+        data: []
+      });
+    }
+    
+    const files = fs.readdirSync(logsDir)
+      .filter(file => file.endsWith('.csv'))
+      .map(file => {
+        const filePath = path.join(logsDir, file);
+        const stats = fs.statSync(filePath);
+        return {
+          name: file,
+          path: filePath,
+          size: stats.size,
+          modified: stats.mtime.toISOString(),
+          created: stats.birthtime.toISOString()
+        };
+      })
+      .sort((a, b) => new Date(b.modified) - new Date(a.modified));
+    
+    res.json({
+      success: true,
+      data: files
+    });
+  }));
+
+  router.get('/csv/data/:filename', asyncHandler(async (req, res) => {
+    const fs = await import('fs');
+    const path = await import('path');
+    
+    const filename = decodeURIComponent(req.params.filename);
+    const filePath = path.join(process.cwd(), 'logs', filename);
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'CSV file not found' }
+      });
+    }
+    
+    try {
+      const csvContent = fs.readFileSync(filePath, 'utf8');
+      const lines = csvContent.split('\n').filter(line => line.trim());
+      
+      if (lines.length <= 1) {
+        return res.json({
+          success: true,
+          data: []
+        });
+      }
+      
+      // Parse CSV data
+      const headers = lines[0].split(',').map(h => h.trim());
+      const data = [];
+      
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        const values = line.split(',');
+        const record = {};
+        
+        headers.forEach((header, index) => {
+          if (values[index] !== undefined) {
+            const value = values[index].trim();
+            // Try to parse as number if it looks like one
+            if (!isNaN(value) && value !== '') {
+              record[header] = parseFloat(value);
+            } else {
+              record[header] = value;
+            }
+          }
+        });
+        
+        data.push(record);
+      }
+      
+      res.json({
+        success: true,
+        data: data,
+        meta: {
+          filename: filename,
+          records: data.length,
+          headers: headers
+        }
+      });
+      
+    } catch (error) {
+      logger.error('Error reading CSV file:', error);
+      res.status(500).json({
+        success: false,
+        error: { message: 'Error reading CSV file: ' + error.message }
+      });
+    }
+  }));
+
+  router.get('/csv/path', asyncHandler(async (req, res) => {
+    if (typeof generatePathFromCSV === 'function') {
+      const pathData = generatePathFromCSV();
+      res.json({
+        success: true,
+        data: pathData
+      });
+    } else {
+      res.json({
+        success: false,
+        error: { message: 'CSV path generation not available' }
+      });
+    }
   }));
 
   // Error handling middleware for API routes

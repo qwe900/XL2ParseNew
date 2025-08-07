@@ -853,22 +853,27 @@ class UIManager {
     updateStatusIndicator(connected, text = null) {
         const statusDot = document.getElementById('connectionStatus');
         const statusText = document.getElementById('connectionText');
-        const deviceInfo = document.getElementById('deviceInfo');
 
         if (statusDot) {
             statusDot.classList.toggle('connected', connected);
         }
 
-        if (statusText && text) {
-            statusText.textContent = text;
-        }
-
-        if (deviceInfo) {
-            deviceInfo.textContent = connected ? (text || 'Connected') : 'No device connected';
+        if (statusText) {
+            statusText.textContent = text || (connected ? 'Connected' : 'Disconnected');
         }
 
         // Announce status change
         this.announceToScreenReader(`Connection status: ${connected ? 'Connected' : 'Disconnected'}`);
+    }
+
+    /**
+     * Update device info display
+     */
+    updateDeviceInfo(info) {
+        const deviceInfo = document.getElementById('deviceInfo');
+        if (deviceInfo) {
+            deviceInfo.textContent = info || 'No device information';
+        }
     }
 
     /**

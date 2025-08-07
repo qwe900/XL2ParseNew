@@ -12,9 +12,12 @@
  * - Memory optimization
  */
 
+// Load environment variables from .env file
+import 'dotenv/config';
+
 import express from 'express';
 import { createServer } from 'http';
-import { Server } from 'socket.io';
+import { EventEmitter } from 'events';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
@@ -27,15 +30,13 @@ import { appConfig } from './src/config/AppConfig.js';
 import { logger } from './src/utils/logger.js';
 import { ErrorHandler } from './src/utils/errors.js';
 import { XL2Connection } from './src/devices/XL2Connection.js';
-import GPSLogger from './gps-logger.js';
+import GPSLogger from './src/devices/gps-logger.js';
 import { createApiRoutes, createApiLogger } from './src/routes/apiRoutes.js';
-import { 
-  setupSocketHandlers, 
-  setupXL2EventForwarding, 
-  setupGPSEventForwarding 
-} from './src/sockets/socketHandlers.js';
+import { createSSEService } from './src/services/sseService.js';
 import { createCSVService } from './src/services/csvService.js';
-import { RPI_CONFIG, detectPiModel, systemHealth } from './config-rpi.js';
+import { StartupService } from './src/services/StartupService.js';
+import { RPI_CONFIG, detectPiModel, systemHealth } from './src/config/config-rpi.js';
+import { WINDOWS_CONFIG, detectWindowsSystemType, windowsSystemHealth } from './src/config/config-windows.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -47,11 +48,12 @@ class XL2WebServer {
   constructor() {
     this.app = null;
     this.server = null;
-    this.io = null;
+    this.sseService = null;
     this.xl2 = null;
     this.gpsLogger = null;
     this.csvService = null;
     this.config = null;
+    this.startupService = null;
     this.isShuttingDown = false;
   }
 
@@ -64,12 +66,19 @@ class XL2WebServer {
       this.config = await appConfig.initialize();
       logger.info('🚀 Starting XL2 Web Server', appConfig.getSummary());
 
-      // Detect Raspberry Pi model if applicable
+      // Detect platform-specific configurations
       if (RPI_CONFIG.isRaspberryPi) {
         const piModel = await detectPiModel();
         if (piModel) {
           this.config.platform.piModel = piModel;
           logger.info(`🍓 Detected Pi Model: ${piModel}`);
+        }
+      } else if (WINDOWS_CONFIG.isWindows) {
+        const windowsSystemType = await detectWindowsSystemType();
+        if (windowsSystemType) {
+          this.config.platform.windowsSystemType = windowsSystemType;
+          logger.info(`🪟 Detected Windows System Type: ${windowsSystemType}`);
+          logger.info(`🪟 Windows Version: ${WINDOWS_CONFIG.version}`);
         }
       }
 
@@ -79,8 +88,8 @@ class XL2WebServer {
       // Setup Express application
       await this.setupExpress();
       
-      // Setup Socket.IO
-      await this.setupSocketIO();
+      // Setup SSE service
+      await this.setupSSE();
       
       // Setup routes
       await this.setupRoutes();
@@ -105,23 +114,122 @@ class XL2WebServer {
   async initializeServices() {
     logger.info('🔧 Initializing services...');
     
-    // Initialize XL2 connection
-    this.xl2 = new XL2Connection();
+    // Create event emitters for device communication
+    const xl2EventEmitter = new EventEmitter();
+    const gpsEventEmitter = new EventEmitter();
     
-    // Initialize GPS logger
-    this.gpsLogger = new GPSLogger();
+    // Initialize XL2 connection with event emitter
+    this.xl2 = new XL2Connection(xl2EventEmitter);
+    
+    // Initialize GPS logger with event emitter
+    this.gpsLogger = new GPSLogger(gpsEventEmitter);
     
     // Initialize CSV service
     this.csvService = createCSVService(this.config.data.csvPath);
     
+    // Initialize SSE service
+    this.sseService = createSSEService();
+    
+    // Initialize startup service for automatic device detection
+    const startupEventEmitter = new EventEmitter();
+    this.startupService = new StartupService(startupEventEmitter);
+    
     // Set up measurement logging callback
-    this.xl2.onMeasurement = async (dbValue) => {
+    this.xl2.onMeasurement = async (dbValue, fullMeasurement) => {
       if (this.gpsLogger.isLogging) {
-        await this.gpsLogger.logMeasurement(dbValue);
+        await this.gpsLogger.logMeasurement(dbValue, fullMeasurement);
       }
     };
     
+    // Set up automatic logging when conditions are met
+    this.setupAutomaticLogging();
+    
     logger.info('✅ Services initialized');
+  }
+
+  /**
+   * Setup automatic logging when GPS and XL2 conditions are met
+   */
+  setupAutomaticLogging() {
+    logger.info('🤖 Setting up automatic CSV logging...');
+    
+    // Track the state of both devices
+    let xl2Measuring = false;
+    let gpsHasPosition = false;
+    let autoLoggingStarted = false;
+    
+    // Check conditions and start/stop logging
+    const checkAndToggleLogging = () => {
+      const shouldLog = xl2Measuring && gpsHasPosition;
+      
+      if (shouldLog && !this.gpsLogger.isLogging && !autoLoggingStarted) {
+        logger.info('🚀 Auto-starting CSV logging: XL2 measuring + GPS position available');
+        this.gpsLogger.startLogging();
+        autoLoggingStarted = true;
+      } else if (!shouldLog && this.gpsLogger.isLogging && autoLoggingStarted) {
+        logger.info('⏹️ Auto-stopping CSV logging: Conditions no longer met');
+        this.gpsLogger.stopLogging();
+        autoLoggingStarted = false;
+      }
+    };
+    
+    // Listen for XL2 measurement events
+    this.xl2.eventEmitter?.on('xl2-measurement', (measurement) => {
+      if (!xl2Measuring) {
+        xl2Measuring = true;
+        logger.info('📊 XL2 measurements detected');
+        checkAndToggleLogging();
+      }
+    });
+    
+    // Listen for XL2 disconnection
+    this.xl2.eventEmitter?.on('xl2-disconnected', () => {
+      if (xl2Measuring) {
+        xl2Measuring = false;
+        logger.info('📊 XL2 measurements stopped');
+        checkAndToggleLogging();
+      }
+    });
+    
+    // Listen for GPS position updates
+    this.gpsLogger.eventEmitter?.on('gps-location-update', (location) => {
+      if (!gpsHasPosition && location.latitude && location.longitude) {
+        gpsHasPosition = true;
+        logger.info('🛰️ GPS position acquired');
+        checkAndToggleLogging();
+      }
+    });
+    
+    // Listen for GPS disconnection
+    this.gpsLogger.eventEmitter?.on('gps-disconnected', () => {
+      if (gpsHasPosition) {
+        gpsHasPosition = false;
+        logger.info('🛰️ GPS position lost');
+        checkAndToggleLogging();
+      }
+    });
+    
+    // Periodic check every 30 seconds to ensure we don't miss state changes
+    setInterval(() => {
+      const currentXL2State = this.xl2.isConnected && this.xl2.isMeasuring;
+      const currentGPSState = this.gpsLogger.isGPSConnected && 
+                             this.gpsLogger.currentLocation.latitude && 
+                             this.gpsLogger.currentLocation.longitude;
+      
+      if (currentXL2State !== xl2Measuring) {
+        xl2Measuring = currentXL2State;
+        logger.debug(`🔄 XL2 state updated: ${xl2Measuring ? 'measuring' : 'not measuring'}`);
+        checkAndToggleLogging();
+      }
+      
+      if (currentGPSState !== gpsHasPosition) {
+        gpsHasPosition = currentGPSState;
+        logger.debug(`🔄 GPS state updated: ${gpsHasPosition ? 'has position' : 'no position'}`);
+        checkAndToggleLogging();
+      }
+    }, 30000);
+    
+    logger.info('✅ Automatic CSV logging configured');
   }
 
   /**
@@ -177,37 +285,23 @@ class XL2WebServer {
   }
 
   /**
-   * Setup Socket.IO server
+   * Setup SSE service
    */
-  async setupSocketIO() {
-    logger.info('🔌 Setting up Socket.IO...');
+  async setupSSE() {
+    logger.info('📡 Setting up Server-Sent Events...');
     
-    this.io = new Server(this.server, {
-      cors: {
-        origin: this.config.security.cors.origin,
-        methods: this.config.security.cors.methods
-      },
-      maxHttpBufferSize: 1e6, // 1MB
-      pingTimeout: 60000,
-      pingInterval: 25000
-    });
-
-    // Setup socket event handlers
-    setupSocketHandlers(
-      this.io, 
-      this.xl2, 
-      this.gpsLogger, 
-      () => this.csvService.generatePathFromCSV()
-    );
-
-    // Setup event forwarding from devices to clients
-    setupXL2EventForwarding(this.xl2, this.io);
-    setupGPSEventForwarding(this.gpsLogger, this.io);
+    // Setup device status callback for new clients
+    this.setupDeviceStatusCallback();
+    
+    // Setup event forwarding from devices to SSE clients
+    this.setupXL2EventForwarding();
+    this.setupGPSEventForwarding();
+    this.setupStartupServiceEventForwarding();
     
     // Setup system performance broadcasting
     this.setupSystemPerformanceBroadcast();
 
-    logger.info('✅ Socket.IO configured');
+    logger.info('✅ SSE service configured');
   }
 
   /**
@@ -220,7 +314,8 @@ class XL2WebServer {
     const apiRoutes = createApiRoutes(
       this.xl2,
       this.gpsLogger,
-      () => this.csvService.generatePathFromCSV()
+      () => this.csvService.generatePathFromCSV(),
+      this.startupService
     );
     this.app.use('/api', apiRoutes);
 
@@ -234,13 +329,30 @@ class XL2WebServer {
       res.sendFile(join(process.cwd(), 'test-system-performance.html'));
     });
 
+    // Serve SSE test page
+    this.app.get('/test-sse', (req, res) => {
+      res.sendFile(join(process.cwd(), 'test-sse.html'));
+    });
+
+    // Serve status test page
+    this.app.get('/test-status', (req, res) => {
+      res.sendFile(join(process.cwd(), 'test-status.html'));
+    });
+
+    // SSE endpoint for real-time events
+    this.app.get('/events', (req, res) => {
+      const clientId = req.query.clientId || null;
+      this.sseService.addClient(res, clientId);
+    });
+
     // Health check endpoint
     this.app.get('/health', (req, res) => {
       res.json({
         status: 'healthy',
         timestamp: new Date().toISOString(),
         version: '2.0.0',
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        sseClients: this.sseService.getClientCount()
       });
     });
 
@@ -276,102 +388,10 @@ class XL2WebServer {
   }
 
   /**
-   * Setup system monitoring for Raspberry Pi with Pi 5 enhancements
+   * Setup system monitoring (disabled)
    */
   setupSystemMonitoring() {
-    if (!this.config.platform.enableSystemMonitoring) {
-      return;
-    }
-
-    logger.info('📊 Setting up enhanced system monitoring...');
-    
-    setInterval(async () => {
-      try {
-        const { systemHealth, detectPiModel, RPI_CONFIG } = await import('./config-rpi.js');
-        const piModel = await detectPiModel();
-        
-        if (piModel === 'pi5' || piModel === 'pi4') {
-          // Use enhanced monitoring for Pi 5/4
-          const tempStatus = await systemHealth.getTemperatureStatus();
-          const throttlingDetails = await systemHealth.getThrottlingDetails();
-          const diskSpace = await systemHealth.getDiskSpace();
-          
-          // Temperature warnings with model-specific thresholds
-          if (tempStatus.status === 'warning' || tempStatus.status === 'critical') {
-            logger.warn(`${piModel.toUpperCase()} Temperature ${tempStatus.status}: ${tempStatus.temp.toFixed(1)}°C (threshold: ${tempStatus.threshold}°C)`);
-            this.io.emit('system-warning', {
-              type: 'temperature',
-              value: tempStatus.temp,
-              threshold: tempStatus.threshold,
-              status: tempStatus.status,
-              model: piModel
-            });
-          }
-          
-          // Enhanced throttling detection
-          if (throttlingDetails?.currentlyThrottled) {
-            const reasons = [];
-            if (throttlingDetails.underVoltageDetected) reasons.push('under-voltage');
-            if (throttlingDetails.armFrequencyCapped) reasons.push('frequency-capped');
-            if (throttlingDetails.softTemperatureLimitActive) reasons.push('temperature-limit');
-            
-            logger.warn(`${piModel.toUpperCase()} CPU throttling active: ${reasons.join(', ')}`);
-            this.io.emit('system-warning', {
-              type: 'throttling',
-              message: `CPU throttling: ${reasons.join(', ')}`,
-              details: throttlingDetails,
-              model: piModel
-            });
-          }
-          
-          // Disk space monitoring
-          if (diskSpace && diskSpace.available < RPI_CONFIG.system.minDiskSpace) {
-            logger.warn(`Low disk space: ${diskSpace.available}MB remaining (${diskSpace.usagePercent}% used)`);
-            this.io.emit('system-warning', {
-              type: 'disk_space',
-              available: diskSpace.available,
-              threshold: RPI_CONFIG.system.minDiskSpace,
-              usagePercent: diskSpace.usagePercent
-            });
-          }
-        } else {
-          // Fallback monitoring for older Pi models
-          const temp = await systemHealth.getCPUTemperature();
-          const throttled = await systemHealth.isThrottled();
-          const diskSpace = await systemHealth.getDiskSpace();
-          
-          if (temp && temp > RPI_CONFIG.system.maxTemperature) {
-            logger.warn(`High CPU temperature: ${temp.toFixed(1)}°C`);
-            this.io.emit('system-warning', {
-              type: 'temperature',
-              value: temp,
-              threshold: RPI_CONFIG.system.maxTemperature
-            });
-          }
-          
-          if (throttled) {
-            logger.warn('CPU throttling detected - consider better cooling or power supply');
-            this.io.emit('system-warning', {
-              type: 'throttling',
-              message: 'CPU throttling detected'
-            });
-          }
-          
-          if (diskSpace && diskSpace.available < RPI_CONFIG.system.minDiskSpace) {
-            logger.warn(`Low disk space: ${diskSpace.available}MB remaining`);
-            this.io.emit('system-warning', {
-              type: 'disk_space',
-              available: diskSpace.available,
-              threshold: RPI_CONFIG.system.minDiskSpace
-            });
-          }
-        }
-      } catch (error) {
-        logger.debug('System monitoring error', error);
-      }
-    }, this.config.measurement.systemHealthCheckInterval);
-
-    logger.info('✅ Enhanced system monitoring configured');
+    logger.info('📊 System monitoring disabled');
   }
 
   /**
@@ -392,11 +412,14 @@ class XL2WebServer {
         });
       });
 
+      const platformName = this.config.platform.isWindows ? 'Windows' : 
+                           (this.config.platform.isRaspberryPi ? 'Raspberry Pi' : 'Unix');
+      
       logger.info('🚀 XL2 Web Server started successfully', {
         port: this.config.server.port,
         host: this.config.server.host,
         environment: this.config.server.environment,
-        platform: this.config.platform.isRaspberryPi ? 'Raspberry Pi' : 'Other'
+        platform: platformName
       });
 
       console.log('');
@@ -405,11 +428,14 @@ class XL2WebServer {
       console.log('🔍 Auto-detect:', this.config.serial.xl2.autoDetect);
       console.log('');
       console.log('🎯 Special focus: 12.5Hz dB measurements');
-      console.log('📊 Web interface available at: http://your-ip:' + this.config.server.port);
+      console.log('📊 Web interface available at: http://localhost:' + this.config.server.port);
       console.log('');
 
-      // Connect to configured devices directly (no scanning)
-      await this.connectConfiguredDevices();
+      // Execute automatic device detection and connection
+      await this.executeDeviceStartupSequence();
+
+      // Setup automatic reconnection system
+      this.setupDeviceReconnectionSystem();
 
     } catch (error) {
       logger.error('❌ Failed to start server', error);
@@ -418,258 +444,519 @@ class XL2WebServer {
   }
 
   /**
-   * Connect to configured devices directly (no scanning)
+   * Execute automatic device detection and connection sequence
    */
-  async connectConfiguredDevices() {
-    logger.info('🔌 Connecting to configured devices (no scanning)...');
+  async executeDeviceStartupSequence() {
+    logger.info('🚀 Starting automatic device detection and connection...');
     
-    const connectionPromises = [];
-    
-    // Connect to configured GPS port
-    if (this.config.serial.gps.port) {
-      connectionPromises.push(this.connectConfiguredGPS());
-    }
+    try {
+      // Execute the comprehensive startup sequence
+      const startupResults = await this.startupService.executeStartupSequence(this.xl2, this.gpsLogger);
+      
+      // Log the results
+      logger.info('🎉 Device startup sequence completed', {
+        devicesFound: startupResults.summary.devicesFound,
+        devicesConnected: startupResults.summary.devicesConnected,
+        xl2Connected: startupResults.connections.xl2.success,
+        xl2Port: startupResults.connections.xl2.port,
+        gpsConnected: startupResults.connections.gps.success,
+        gpsPort: startupResults.connections.gps.port,
+        errors: startupResults.summary.errors
+      });
 
-    // Connect to configured XL2 port
-    if (this.config.serial.xl2.port) {
-      connectionPromises.push(this.connectConfiguredXL2());
-    }
+      // Display connection status
+      console.log('');
+      console.log('📡 Device Connection Status:');
+      
+      if (startupResults.connections.xl2.success) {
+        console.log(`✅ XL2 Audio Analyzer: Connected to ${startupResults.connections.xl2.port}`);
+      } else {
+        console.log(`❌ XL2 Audio Analyzer: Not connected (${startupResults.connections.xl2.error || 'No device found'})`);
+      }
+      
+      if (startupResults.connections.gps.success) {
+        console.log(`✅ GPS Module: Connected to ${startupResults.connections.gps.port}`);
+      } else {
+        console.log(`❌ GPS Module: Not connected (${startupResults.connections.gps.error || 'No device found'})`);
+      }
+      
+      console.log('');
+      console.log(`🔍 Total devices scanned: ${startupResults.summary.devicesFound}`);
+      console.log(`🔌 Devices connected: ${startupResults.summary.devicesConnected}`);
+      
+      if (startupResults.summary.errors.length > 0) {
+        console.log(`⚠️ Errors encountered: ${startupResults.summary.errors.length}`);
+        startupResults.summary.errors.forEach(error => {
+          console.log(`   - ${error}`);
+        });
+      }
+      
+      console.log('');
 
-    // Wait for both connections to complete
-    if (connectionPromises.length > 0) {
-      await Promise.allSettled(connectionPromises);
+    } catch (error) {
+      logger.error('❌ Device startup sequence failed', error);
+      
+      console.log('');
+      console.log('❌ Device Connection Status: FAILED');
+      console.log(`   Error: ${error.message}`);
+      console.log('   The server will continue running, but devices may not be available.');
+      console.log('   You can try manual connection through the web interface.');
+      console.log('');
+      
+      // Don't throw the error - let the server continue running
     }
-
-    logger.info('✅ Configured device connections completed');
   }
 
   /**
-   * Setup periodic check for XL2 reconnection
+   * Setup automatic device reconnection system
    */
-  setupXL2ReconnectionCheck() {
-    // DISABLED: Auto-reconnection completely disabled to prevent measurement interference
-    logger.info('🔍 XL2 auto-reconnection DISABLED - manual connection required to prevent measurement interference');
-    return;
-    
-    // Original code commented out to prevent any automatic device operations
-    /*
+  setupDeviceReconnectionSystem() {
     // Allow disabling auto-reconnection via environment variable
-    if (process.env.DISABLE_XL2_AUTO_RECONNECT === 'true') {
-      logger.info('🔍 XL2 auto-reconnection disabled via environment variable');
+    if (process.env.DISABLE_AUTO_RECONNECT === 'true') {
+      logger.info('🔍 Auto-reconnection disabled via environment variable');
       return;
     }
-    
+
+    let reconnectionInProgress = false;
     let reconnectionAttempts = 0;
-    let isReconnecting = false; // Prevent concurrent reconnection attempts
-    const maxReconnectionAttempts = 10; // Stop after 10 failed attempts
-    
-    // Check every 60 seconds if XL2 is disconnected (reduced frequency)
-    setInterval(async () => {
-      const isConnected = this.xl2.isConnected;
-      const currentPort = this.xl2.port?.path;
-      
-      if (!isConnected && this.config.serial.xl2.autoDetect && !isReconnecting) {
-        // Stop trying after max attempts to avoid spam
-        if (reconnectionAttempts >= maxReconnectionAttempts) {
-          logger.info(`🔍 XL2 reconnection stopped after ${maxReconnectionAttempts} attempts. Manual connection required.`);
-          return;
-        }
-        
-        isReconnecting = true;
-        reconnectionAttempts++;
-        logger.info(`🔍 XL2 not connected, searching for devices... (attempt ${reconnectionAttempts}/${maxReconnectionAttempts})`);
-        
-        try {
-          await this.autoConnectXL2();
-          // Reset counter on successful connection
-          if (this.xl2.isConnected) {
-            reconnectionAttempts = 0;
-            logger.info(`✅ XL2 reconnection successful`);
-          }
-        } catch (error) {
-          logger.debug('XL2 reconnection attempt failed', {
-            error: error.message,
-            attempt: reconnectionAttempts,
-            maxAttempts: maxReconnectionAttempts
-          });
-        } finally {
-          isReconnecting = false;
-        }
-      } else if (isConnected) {
-        // Reset counter if XL2 is connected
+    const maxReconnectionAttempts = 5;
+    const reconnectionDelay = 10000; // 10 seconds between attempts
+
+    logger.info('🔍 Setting up automatic device reconnection system');
+
+    // Monitor device disconnections and trigger reconnection
+    const checkAndReconnect = async () => {
+      if (reconnectionInProgress) {
+        return; // Already attempting reconnection
+      }
+
+      const xl2Connected = this.xl2.isConnected;
+      const gpsConnected = this.gpsLogger.isGPSConnected;
+
+      // If both devices are connected, reset attempt counter
+      if (xl2Connected && gpsConnected) {
         if (reconnectionAttempts > 0) {
-          logger.debug(`✅ XL2 connected to ${currentPort}, resetting reconnection counter`);
+          logger.info('✅ All devices reconnected successfully, resetting attempt counter');
           reconnectionAttempts = 0;
         }
+        return;
       }
-    }, 60000); // Check every 60 seconds (reduced from 30)
-    */
-  }
 
-  /**
-   * Setup periodic check for GPS reconnection
-   */
-  setupGPSReconnectionCheck() {
-    // DISABLED: GPS auto-reconnection disabled to prevent any interference
-    logger.info('🛰️ GPS auto-reconnection DISABLED - manual connection required');
-    return;
-    
-    // Original code commented out
-    /*
-    // Check every 45 seconds if GPS is disconnected (offset from XL2 check)
-    setInterval(async () => {
-      if (!this.gpsLogger.isGPSConnected && this.config.serial.gps.autoConnect) {
-        logger.info('🛰️ GPS not connected, searching for devices...');
+      // If any device is disconnected and we haven't exceeded max attempts
+      if ((!xl2Connected || !gpsConnected) && reconnectionAttempts < maxReconnectionAttempts) {
+        reconnectionInProgress = true;
+        reconnectionAttempts++;
+
+        logger.warn(`🔄 Device disconnection detected, starting reconnection attempt ${reconnectionAttempts}/${maxReconnectionAttempts}`);
+        logger.info(`📊 Device Status: XL2=${xl2Connected ? 'Connected' : 'Disconnected'}, GPS=${gpsConnected ? 'Connected' : 'Disconnected'}`);
+
+        // Broadcast reconnection status to clients
+        this.sseService.broadcast('device-reconnection-started', {
+          attempt: reconnectionAttempts,
+          maxAttempts: maxReconnectionAttempts,
+          xl2Connected,
+          gpsConnected,
+          timestamp: new Date().toISOString()
+        });
+
         try {
-          await this.autoConnectGPS();
+          // Execute the full startup sequence to reconnect devices
+          await this.executeDeviceStartupSequence();
+          
+          // Check if reconnection was successful
+          const xl2Reconnected = this.xl2.isConnected;
+          const gpsReconnected = this.gpsLogger.isGPSConnected;
+          
+          if (xl2Reconnected && gpsReconnected) {
+            logger.info('✅ Device reconnection successful - all devices connected');
+            reconnectionAttempts = 0; // Reset counter on success
+            
+            this.sseService.broadcast('device-reconnection-success', {
+              xl2Connected: xl2Reconnected,
+              gpsConnected: gpsReconnected,
+              timestamp: new Date().toISOString()
+            });
+          } else {
+            logger.warn(`⚠️ Partial reconnection: XL2=${xl2Reconnected ? 'Connected' : 'Failed'}, GPS=${gpsReconnected ? 'Connected' : 'Failed'}`);
+            
+            this.sseService.broadcast('device-reconnection-partial', {
+              attempt: reconnectionAttempts,
+              maxAttempts: maxReconnectionAttempts,
+              xl2Connected: xl2Reconnected,
+              gpsConnected: gpsReconnected,
+              timestamp: new Date().toISOString()
+            });
+          }
+
         } catch (error) {
-          logger.debug('GPS reconnection attempt failed', { error: error.message });
+          logger.error(`❌ Device reconnection attempt ${reconnectionAttempts} failed:`, error.message);
+          
+          this.sseService.broadcast('device-reconnection-failed', {
+            attempt: reconnectionAttempts,
+            maxAttempts: maxReconnectionAttempts,
+            error: error.message,
+            timestamp: new Date().toISOString()
+          });
+        } finally {
+          reconnectionInProgress = false;
         }
+      } else if (reconnectionAttempts >= maxReconnectionAttempts) {
+        logger.warn(`⚠️ Maximum reconnection attempts (${maxReconnectionAttempts}) reached. Manual intervention required.`);
+        
+        this.sseService.broadcast('device-reconnection-exhausted', {
+          maxAttempts: maxReconnectionAttempts,
+          xl2Connected: this.xl2.isConnected,
+          gpsConnected: this.gpsLogger.isGPSConnected,
+          timestamp: new Date().toISOString()
+        });
       }
-    }, 45000); // Check every 45 seconds (offset from XL2)
-    */
+    };
+
+    // Check for disconnections every 15 seconds
+    setInterval(checkAndReconnect, 15000);
+
+    // Also trigger immediate check on device disconnect events
+    this.xl2.eventEmitter?.on('xl2-disconnected', () => {
+      logger.warn('🔌 XL2 disconnected - triggering reconnection check');
+      setTimeout(checkAndReconnect, 2000); // Small delay to allow cleanup
+    });
+
+    // Note: GPS disconnect events would need to be added to GPSLogger if not already present
+    if (this.gpsLogger.eventEmitter) {
+      this.gpsLogger.eventEmitter.on('gps-disconnected', () => {
+        logger.warn('🛰️ GPS disconnected - triggering reconnection check');
+        setTimeout(checkAndReconnect, 2000); // Small delay to allow cleanup
+      });
+    }
+
+    logger.info('✅ Automatic device reconnection system configured');
+  }
+
+
+
+  /**
+   * Setup device status callback for new SSE clients
+   */
+  setupDeviceStatusCallback() {
+    // Set up callback to provide current device status to new clients
+    this.sseService.setDeviceStatusCallback(() => {
+      return {
+        xl2: {
+          connected: this.xl2.isConnected,
+          port: this.xl2.port?.path || null,
+          deviceInfo: this.xl2.deviceInfo || null
+        },
+        gps: {
+          connected: this.gpsLogger.isGPSConnected,
+          port: this.gpsLogger.gpsPort?.path || null,
+          location: this.gpsLogger.getCurrentLocation()
+        },
+        startup: {
+          completed: this.startupService.isStartupCompleted(),
+          results: this.startupService.getStartupResults()
+        }
+      };
+    });
   }
 
   /**
-   * Setup system performance broadcasting with Pi 5 optimizations
+   * Setup XL2 event forwarding to SSE clients
+   */
+  setupXL2EventForwarding() {
+    if (!this.xl2.eventEmitter) {
+      logger.warn('XL2 EventEmitter not available, skipping event forwarding setup');
+      return;
+    }
+
+    // Forward XL2 connection events
+    this.xl2.eventEmitter.on('xl2-connected', (data) => {
+      this.sseService.broadcast('xl2-connected', data);
+    });
+
+    this.xl2.eventEmitter.on('xl2-disconnected', (data) => {
+      this.sseService.broadcast('xl2-disconnected', data);
+    });
+
+    this.xl2.eventEmitter.on('xl2-error', (error) => {
+      this.sseService.broadcast('xl2-error', { message: error.message || error, timestamp: new Date().toISOString() });
+    });
+
+    this.xl2.eventEmitter.on('xl2-device-info', (info) => {
+      this.sseService.broadcast('xl2-device-info', info);
+    });
+
+    // Forward measurement data
+    this.xl2.eventEmitter.on('xl2-measurement', (data) => {
+      this.sseService.broadcast('xl2-measurement', data);
+    });
+
+    this.xl2.eventEmitter.on('xl2-fft-frequencies', (data) => {
+      this.sseService.broadcast('xl2-fft-frequencies', data);
+    });
+
+    this.xl2.eventEmitter.on('xl2-fft-spectrum', (data) => {
+      this.sseService.broadcast('xl2-fft-spectrum', data);
+    });
+
+    this.xl2.eventEmitter.on('xl2-data', (data) => {
+      this.sseService.broadcast('xl2-data', data);
+    });
+
+    this.xl2.eventEmitter.on('xl2-command', (command) => {
+      this.sseService.broadcast('xl2-command', command);
+    });
+  }
+
+  /**
+   * Setup GPS event forwarding to SSE clients
+   */
+  setupGPSEventForwarding() {
+    if (!this.gpsLogger.eventEmitter) {
+      logger.warn('GPS EventEmitter not available, skipping event forwarding setup');
+      return;
+    }
+
+    // Forward GPS connection events
+    this.gpsLogger.eventEmitter.on('gps-connected', (data) => {
+      this.sseService.broadcast('gps-connected', data);
+    });
+
+    this.gpsLogger.eventEmitter.on('gps-disconnected', (data) => {
+      this.sseService.broadcast('gps-disconnected', data);
+    });
+
+    this.gpsLogger.eventEmitter.on('gps-error', (error) => {
+      this.sseService.broadcast('gps-error', { message: error.message || error, timestamp: new Date().toISOString() });
+    });
+
+    // Forward GPS data
+    this.gpsLogger.eventEmitter.on('gps-location-update', (data) => {
+      this.sseService.broadcast('gps-location-update', data);
+    });
+
+    this.gpsLogger.eventEmitter.on('gps-logging-started', (data) => {
+      this.sseService.broadcast('gps-logging-started', data);
+    });
+
+    this.gpsLogger.eventEmitter.on('gps-logging-stopped', (data) => {
+      this.sseService.broadcast('gps-logging-stopped', data);
+    });
+  }
+
+  /**
+   * Setup startup service event forwarding to SSE clients
+   */
+  setupStartupServiceEventForwarding() {
+    if (!this.startupService.eventEmitter) {
+      logger.warn('Startup Service EventEmitter not available, skipping event forwarding setup');
+      return;
+    }
+
+    // Forward startup events
+    this.startupService.eventEmitter.on('device-scan-started', (data) => {
+      this.sseService.broadcast('device-scan-started', data);
+    });
+
+    this.startupService.eventEmitter.on('device-scan-completed', (data) => {
+      this.sseService.broadcast('device-scan-completed', data);
+    });
+
+    this.startupService.eventEmitter.on('xl2-connection-status', (data) => {
+      this.sseService.broadcast('xl2-connection-status', data);
+    });
+
+    this.startupService.eventEmitter.on('gps-connection-status', (data) => {
+      this.sseService.broadcast('gps-connection-status', data);
+    });
+
+    // Forward startup phase updates (scanning, connecting, finalizing)
+    this.startupService.eventEmitter.on('startup-phase', (data) => {
+      this.sseService.broadcast('startup-phase', data);
+    });
+
+    // Forward startup completion (correct event name)
+    this.startupService.eventEmitter.on('startup-complete', (data) => {
+      this.sseService.broadcast('startup-complete', data);
+    });
+
+    // Forward startup errors
+    this.startupService.eventEmitter.on('startup-error', (data) => {
+      this.sseService.broadcast('startup-error', data);
+    });
+  }
+
+  /**
+   * Setup system performance broadcasting
    */
   setupSystemPerformanceBroadcast() {
-    // Use Pi-optimized monitoring rate
-    const monitoringRate = this.config.performance.systemMonitoringRate || 10000;
+    if (!this.config.platform.enableSystemMonitoring) {
+      logger.info('📊 System performance broadcasting disabled');
+      return;
+    }
+
+    const monitoringRate = this.config.performance?.systemMonitoringRate || 10000;
+    logger.info(`📊 Setting up system performance broadcasting (${monitoringRate}ms interval)`);
     
-    logger.info(`📊 Setting up system performance monitoring (${monitoringRate}ms interval)`);
-    
-    // Broadcast system performance at optimized intervals
+    // Broadcast system performance at regular intervals
     setInterval(async () => {
       try {
         const performanceData = await this.getSystemPerformanceData();
-        this.io.emit('system-performance', performanceData);
+        this.sseService.broadcast('system-performance', performanceData);
         
-        // Log warnings for Pi 5 specific issues
-        if (performanceData.piModel === 'pi5') {
-          if (performanceData.temperatureStatus === 'critical') {
-            logger.warn(`🌡️ Pi 5 Critical Temperature: ${performanceData.cpuTemp}°C`);
-          }
-          if (performanceData.throttlingDetails?.currentlyThrottled) {
-            logger.warn('⚡ Pi 5 CPU Throttling Active', performanceData.throttlingDetails);
-          }
-          if (performanceData.cpuInfo?.currentFreq && performanceData.cpuInfo.currentFreq < 2000) {
-            logger.debug(`🔄 Pi 5 CPU Frequency: ${performanceData.cpuInfo.currentFreq}MHz`);
-          }
+        // Log warnings for critical issues
+        if (performanceData.temperatureStatus === 'critical') {
+          logger.warn(`🌡️ Critical Temperature: ${performanceData.cpuTemp}°C`);
+        }
+        if (performanceData.throttled) {
+          logger.warn('⚡ CPU Throttling Active');
         }
       } catch (error) {
         logger.debug('System performance broadcast failed', { error: error.message });
       }
     }, monitoringRate);
 
-    // Broadcast client count changes
-    this.io.on('connection', (socket) => {
-      // Broadcast updated client count to all clients
-      this.io.emit('client-count', this.io.engine.clientsCount);
-      
-      socket.on('disconnect', () => {
-        // Broadcast updated client count after disconnect
-        setTimeout(() => {
-          this.io.emit('client-count', this.io.engine.clientsCount);
-        }, 100);
-      });
-    });
+    // Send initial performance data
+    setTimeout(async () => {
+      try {
+        const performanceData = await this.getSystemPerformanceData();
+        this.sseService.broadcast('system-performance', performanceData);
+      } catch (error) {
+        logger.debug('Initial system performance broadcast failed', { error: error.message });
+      }
+    }, 2000);
   }
 
   /**
-   * Get system performance data with Pi 5 enhancements
+   * Get system performance data
    */
   async getSystemPerformanceData() {
-    const { systemHealth, detectPiModel } = await import('./config-rpi.js');
-    
     try {
-      // For Pi 5 and Pi 4, use comprehensive system status
-      const piModel = await detectPiModel();
+      const isWindows = this.config.platform.isWindows;
+      const isRaspberryPi = this.config.platform.isRaspberryPi;
       
-      if (piModel === 'pi5' || piModel === 'pi4') {
-        const systemStatus = await systemHealth.getSystemStatus();
+      if (isWindows) {
+        // Windows system monitoring
+        const { windowsSystemHealth } = await import('./src/config/config-windows.js');
+        const systemStatus = await windowsSystemHealth.getSystemStatus();
         
         return {
-          // Enhanced data for Pi 5/4
-          cpuTemp: systemStatus.temperature?.temp || null,
-          temperatureStatus: systemStatus.temperature?.status || 'unknown',
+          cpuTemp: null, // Windows doesn't typically expose CPU temp easily
+          temperatureStatus: 'unknown',
           memoryUsage: systemStatus.memory?.usagePercent || null,
-          memoryDetails: {
-            total: systemStatus.memory?.total || null,
-            available: systemStatus.memory?.available || null,
-            cached: systemStatus.memory?.cached || null
-          },
+          memoryDetails: systemStatus.memory || null,
           diskSpace: systemStatus.disk?.available || null,
           diskUsagePercent: systemStatus.disk?.usagePercent || null,
           uptime: process.uptime(),
-          connectedClients: this.io.engine.clientsCount,
-          systemLoad: null, // Will be calculated separately
-          throttled: systemStatus.throttling?.currentlyThrottled || false,
-          throttlingDetails: systemStatus.throttling,
-          cpuInfo: systemStatus.cpu,
-          piModel: systemStatus.model,
-          timestamp: systemStatus.timestamp
+          connectedClients: this.sseService.getClientCount(),
+          systemLoad: systemStatus.cpu?.usage || null,
+          throttled: false,
+          platform: 'windows',
+          timestamp: new Date().toISOString()
         };
+        
+      } else if (isRaspberryPi) {
+        // Raspberry Pi system monitoring
+        const { systemHealth, detectPiModel } = await import('./src/config/config-rpi.js');
+        const piModel = await detectPiModel();
+        
+        if (piModel === 'pi5' || piModel === 'pi4') {
+          // Enhanced monitoring for Pi 5/4
+          const systemStatus = await systemHealth.getSystemStatus();
+          
+          return {
+            cpuTemp: systemStatus.temperature?.temp || null,
+            temperatureStatus: systemStatus.temperature?.status || 'unknown',
+            memoryUsage: systemStatus.memory?.usagePercent || null,
+            memoryDetails: systemStatus.memory || null,
+            diskSpace: systemStatus.disk?.available || null,
+            diskUsagePercent: systemStatus.disk?.usagePercent || null,
+            uptime: process.uptime(),
+            connectedClients: this.sseService.getClientCount(),
+            systemLoad: null,
+            throttled: systemStatus.throttling?.currentlyThrottled || false,
+            throttlingDetails: systemStatus.throttling,
+            cpuInfo: systemStatus.cpu,
+            piModel: systemStatus.model,
+            platform: 'raspberry-pi',
+            timestamp: systemStatus.timestamp
+          };
+        } else {
+          // Fallback for older Pi models
+          const [cpuTemp, throttled, diskSpace, memoryUsage] = await Promise.all([
+            systemHealth.getCPUTemperature().catch(() => null),
+            systemHealth.isThrottled().catch(() => false),
+            systemHealth.getDiskSpace().catch(() => null),
+            this.getMemoryUsage().catch(() => null)
+          ]);
+          
+          return {
+            cpuTemp,
+            temperatureStatus: cpuTemp ? (cpuTemp > 70 ? 'warning' : 'normal') : 'unknown',
+            memoryUsage,
+            diskSpace: diskSpace?.available || null,
+            uptime: process.uptime(),
+            connectedClients: this.sseService.getClientCount(),
+            systemLoad: null,
+            throttled,
+            piModel,
+            platform: 'raspberry-pi',
+            timestamp: new Date().toISOString()
+          };
+        }
       } else {
-        // Fallback for older Pi models or non-Pi systems
-        const [cpuTemp, throttled, diskSpace, memoryUsage, systemLoad] = await Promise.all([
-          systemHealth.getCPUTemperature().catch(() => null),
-          systemHealth.isThrottled().catch(() => false),
-          systemHealth.getDiskSpace().catch(() => null),
-          this.getMemoryUsage().catch(() => null),
-          this.getSystemLoad().catch(() => null)
-        ]);
+        // Generic Unix/Linux system
+        const memoryUsage = await this.getMemoryUsage().catch(() => null);
         
         return {
-          cpuTemp,
-          temperatureStatus: cpuTemp ? (cpuTemp > 70 ? 'warning' : 'normal') : 'unknown',
+          cpuTemp: null,
+          temperatureStatus: 'unknown',
           memoryUsage,
-          diskSpace: diskSpace?.available || null,
+          diskSpace: null,
           uptime: process.uptime(),
-          connectedClients: this.io.engine.clientsCount,
-          systemLoad,
-          throttled,
-          piModel
+          connectedClients: this.sseService.getClientCount(),
+          systemLoad: null,
+          throttled: false,
+          platform: 'unix',
+          timestamp: new Date().toISOString()
         };
       }
     } catch (error) {
-      logger.debug('Error getting enhanced system performance data, using fallback', error);
+      logger.debug('Error getting system performance data', error);
       
       // Basic fallback
       return {
         cpuTemp: null,
+        temperatureStatus: 'unknown',
         memoryUsage: null,
         diskSpace: null,
         uptime: process.uptime(),
-        connectedClients: this.io.engine.clientsCount,
+        connectedClients: this.sseService.getClientCount(),
         systemLoad: null,
         throttled: false,
-        piModel: 'unknown'
+        platform: 'unknown',
+        timestamp: new Date().toISOString()
       };
     }
   }
 
   /**
-   * Get memory usage percentage
+   * Get memory usage (fallback method)
    */
   async getMemoryUsage() {
-    const os = await import('os');
-    const total = os.totalmem();
-    const free = os.freemem();
+    const used = process.memoryUsage();
+    const total = require('os').totalmem();
+    const free = require('os').freemem();
     
-    return ((total - free) / total) * 100;
-  }
-
-  /**
-   * Get system load percentage (simplified)
-   */
-  async getSystemLoad() {
-    const os = await import('os');
-    const loadAvg = os.loadavg();
-    const cpuCount = os.cpus().length;
-    
-    // Use 1-minute load average
-    return Math.min((loadAvg[0] / cpuCount) * 100, 100);
+    return {
+      usagePercent: Math.round(((total - free) / total) * 100),
+      total: Math.round(total / 1024 / 1024), // MB
+      available: Math.round(free / 1024 / 1024), // MB
+      process: {
+        rss: Math.round(used.rss / 1024 / 1024), // MB
+        heapTotal: Math.round(used.heapTotal / 1024 / 1024), // MB
+        heapUsed: Math.round(used.heapUsed / 1024 / 1024) // MB
+      }
+    };
   }
 
   /**
@@ -689,7 +976,7 @@ class XL2WebServer {
       
       await this.gpsLogger.connectGPS(configuredPort);
       logger.connection('GPS', configuredPort, true);
-      this.io.emit('gps-connected', configuredPort);
+      this.sseService.broadcast('gps-connected', { port: configuredPort });
       
       await this.startGPSLogging();
       logger.info(`✅ Successfully connected to GPS at ${configuredPort}`);
@@ -708,7 +995,7 @@ class XL2WebServer {
       setTimeout(() => {
         try {
           this.gpsLogger.startLogging();
-          this.io.emit('logging-started', {
+          this.sseService.broadcast('logging-started', {
             filePath: this.gpsLogger.logFilePath,
             startTime: this.gpsLogger.logStartTime
           });
@@ -738,9 +1025,9 @@ class XL2WebServer {
       
       const connectedPort = await this.xl2.connect(configuredPort);
       
-      // Emit connection events
-      this.io.emit('xl2-connected', connectedPort);
-      this.io.emit('xl2-device-info', this.xl2.deviceInfo || 'Connected');
+      // Broadcast connection events via SSE
+      this.sseService.broadcast('xl2-connected', connectedPort);
+      this.sseService.broadcast('xl2-device-info', this.xl2.deviceInfo || 'Connected');
       
       logger.info(`✅ Successfully connected to XL2 at ${connectedPort}`);
       logger.info('🚀 Continuous FFT measurements started automatically');
@@ -748,8 +1035,8 @@ class XL2WebServer {
     } catch (error) {
       logger.error(`❌ Failed to connect to configured XL2 port ${configuredPort}`, error);
       
-      // If connection failed, emit disconnected status
-      this.io.emit('xl2-disconnected');
+      // If connection failed, broadcast disconnected status via SSE
+      this.sseService.broadcast('xl2-disconnected', {});
     }
   }
 

@@ -5,7 +5,9 @@
 
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { RPI_CONFIG, getOptimalConfig } from '../../config-rpi.js';
+import { platform } from 'os';
+import { RPI_CONFIG, getOptimalConfig } from './config-rpi.js';
+import { WINDOWS_CONFIG, getOptimalWindowsConfig } from './config-windows.js';
 import { SERIAL_CONFIG, BUFFER_SIZES, INTERVALS } from '../constants.js';
 import { ConfigError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
@@ -32,29 +34,66 @@ export class AppConfig {
     }
 
     try {
-      // Get Raspberry Pi optimizations
-      const optimalConfig = await getOptimalConfig();
+      // Get platform-specific optimizations
+      const isWindows = platform() === 'win32';
+      const isRaspberryPi = RPI_CONFIG.isRaspberryPi;
+      
+      let optimalConfig;
+      if (isWindows) {
+        optimalConfig = await getOptimalWindowsConfig();
+      } else if (isRaspberryPi) {
+        optimalConfig = await getOptimalConfig();
+      } else {
+        // Default configuration for other Unix systems
+        optimalConfig = {
+          maxClients: 10,
+          fftBufferSize: 2048,
+          gpsUpdateRate: 1000,
+          enableHeatmap: true,
+          maxHeatmapPoints: 5000,
+          systemMonitoringRate: 10000,
+          enableAdvancedFeatures: false
+        };
+      }
       
       // Build configuration object
       this.config = {
         // Server configuration
         server: {
           port: this._getEnvNumber('PORT', 3000),
-          host: this._getEnvString('HOST', '0.0.0.0'),
+          host: this._getEnvString('HOST', isWindows ? '0.0.0.0' : '0.0.0.0'), // Windows defaults to localhost for security
           environment: this._getEnvString('NODE_ENV', 'development')
         },
 
-        // Serial port configuration - FIXED PORTS, NO AUTO-DETECTION
+        // Serial port configuration - Platform-specific defaults
         serial: {
           xl2: {
-            port: this._getEnvString('XL2_SERIAL_PORT', '/dev/ttyACM0'), // Fixed XL2 port
+            port: this._getEnvString('XL2_SERIAL_PORT', this._getDefaultXL2Port(isWindows, isRaspberryPi)),
             baudRate: SERIAL_CONFIG.XL2_BAUD_RATE,
-            autoDetect: false // DISABLED - use fixed port only
+            autoDetect: this._getEnvBoolean('XL2_AUTO_DETECT', true), // Enable auto-detection by default
+            // Windows-specific settings
+            ...(isWindows && {
+              rtscts: false,
+              xon: false,
+              xoff: false,
+              xany: false,
+              lock: false,
+              highWaterMark: 65536
+            })
           },
           gps: {
-            port: this._getEnvString('GPS_SERIAL_PORT', '/dev/ttyACM1'), // Fixed GPS port
-            baudRates: SERIAL_CONFIG.GPS_BAUD_RATES,
-            autoConnect: false // DISABLED - use fixed port only
+            port: this._getEnvString('GPS_SERIAL_PORT', this._getDefaultGPSPort(isWindows, isRaspberryPi)),
+            baudRates: isWindows ? WINDOWS_CONFIG.serialSettings.gps.baudRates : SERIAL_CONFIG.GPS_BAUD_RATES,
+            autoConnect: this._getEnvBoolean('GPS_AUTO_CONNECT', true), // Enable auto-connection by default
+            // Windows-specific settings
+            ...(isWindows && {
+              rtscts: false,
+              xon: false,
+              xoff: false,
+              xany: false,
+              lock: false,
+              highWaterMark: 65536
+            })
           }
         },
 
@@ -148,9 +187,11 @@ export class AppConfig {
 
         // Platform-specific settings
         platform: {
-          isRaspberryPi: RPI_CONFIG.isRaspberryPi,
-          piModel: null, // Will be detected
-          enableSystemMonitoring: RPI_CONFIG.isRaspberryPi && this._getEnvBoolean('SYSTEM_MONITORING_ENABLED', true)
+          isWindows: isWindows,
+          isRaspberryPi: isRaspberryPi,
+          piModel: null, // Will be detected for Pi
+          windowsSystemType: null, // Will be detected for Windows
+          enableSystemMonitoring: (isRaspberryPi || isWindows) && this._getEnvBoolean('SYSTEM_MONITORING_ENABLED', true)
         },
 
         // File paths
@@ -167,8 +208,9 @@ export class AppConfig {
       this.isInitialized = true;
       logger.info('Application configuration initialized', {
         environment: this.config.server.environment,
-        platform: RPI_CONFIG.isRaspberryPi ? 'Raspberry Pi' : 'Other',
-        port: this.config.server.port
+        platform: isWindows ? 'Windows' : (isRaspberryPi ? 'Raspberry Pi' : 'Other'),
+        port: this.config.server.port,
+        host: this.config.server.host
       });
 
       return this.config;
@@ -273,13 +315,35 @@ export class AppConfig {
   /**
    * Get default XL2 port based on platform
    * @private
+   * @param {boolean} isWindows - Is Windows platform
+   * @param {boolean} isRaspberryPi - Is Raspberry Pi platform
    * @returns {string} Default XL2 port
    */
-  _getDefaultXL2Port() {
-    if (RPI_CONFIG.isRaspberryPi) {
+  _getDefaultXL2Port(isWindows, isRaspberryPi) {
+    if (isWindows) {
+      return WINDOWS_CONFIG.serialPorts.xl2[0]; // COM1
+    }
+    if (isRaspberryPi) {
       return RPI_CONFIG.serialPorts.xl2[0];
     }
-    return '/dev/ttyUSB0';
+    return '/dev/ttyUSB0'; // Default Unix
+  }
+
+  /**
+   * Get default GPS port based on platform
+   * @private
+   * @param {boolean} isWindows - Is Windows platform
+   * @param {boolean} isRaspberryPi - Is Raspberry Pi platform
+   * @returns {string} Default GPS port
+   */
+  _getDefaultGPSPort(isWindows, isRaspberryPi) {
+    if (isWindows) {
+      return WINDOWS_CONFIG.serialPorts.gps[0]; // COM3
+    }
+    if (isRaspberryPi) {
+      return RPI_CONFIG.serialPorts.gps[0];
+    }
+    return '/dev/ttyUSB1'; // Default Unix
   }
 
   /**
@@ -293,7 +357,19 @@ export class AppConfig {
       return envOrigins.split(',').map(origin => origin.trim());
     }
 
+    const isWindows = platform() === 'win32';
+    
     // Default CORS origins
+    if (isWindows) {
+      return [
+        'http://localhost:*',
+        'http://127.0.0.1:*',
+        'http://192.168.*',
+        'http://10.*',
+        'http://172.*'
+      ];
+    }
+    
     if (RPI_CONFIG.isRaspberryPi) {
       return [
         'http://localhost:*',

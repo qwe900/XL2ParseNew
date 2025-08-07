@@ -4,8 +4,8 @@
  */
 
 class ConnectionManager {
-    constructor(socket) {
-        this.socket = socket;
+    constructor(eventSource) {
+        this.eventSource = eventSource;
         this.isConnected = false;
         this.currentPort = null;
         this.deviceInfo = null;
@@ -19,52 +19,61 @@ class ConnectionManager {
     }
 
     /**
-     * Setup socket event listeners
+     * Setup SSE event listeners
      */
     setupEventListeners() {
         // Connection events
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_CONNECTED, (port) => {
-            this.handleConnectionSuccess(port);
+        this.eventSource.addEventListener('xl2-connected', (event) => {
+            const data = JSON.parse(event.data);
+            this.handleConnectionSuccess(data.port || data);
         });
 
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_DISCONNECTED, () => {
+        this.eventSource.addEventListener('xl2-disconnected', (event) => {
             this.handleDisconnection();
         });
 
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_ERROR, (error) => {
-            this.handleConnectionError(error);
+        this.eventSource.addEventListener('xl2-error', (event) => {
+            const data = JSON.parse(event.data);
+            this.handleConnectionError(data.message || data);
         });
 
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_DEVICE_INFO, (info) => {
+        this.eventSource.addEventListener('xl2-device-info', (event) => {
+            const info = JSON.parse(event.data);
             this.deviceInfo = info;
-            ui.updateStatusIndicator(true, `Connected: ${info}`);
+            ui.updateDeviceInfo(info);
         });
 
         // Port and device scanning events
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_PORTS, (ports) => {
+        this.eventSource.addEventListener('xl2-ports', (event) => {
+            const ports = JSON.parse(event.data);
             this.handlePortsReceived(ports);
         });
 
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_DEVICES_FOUND, (devices) => {
+        this.eventSource.addEventListener('xl2-devices-found', (event) => {
+            const devices = JSON.parse(event.data);
             this.handleDevicesFound(devices);
         });
 
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_SCAN_STATUS, (status) => {
+        this.eventSource.addEventListener('xl2-scan-status', (event) => {
+            const status = JSON.parse(event.data);
             ui.updateScanStatus(status, 'scanning');
         });
 
         // Command events
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_COMMAND_SUCCESS, (message) => {
+        this.eventSource.addEventListener('xl2-command-success', (event) => {
+            const message = JSON.parse(event.data);
             ui.showToast(message, 'success');
         });
 
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_DATA, (data) => {
+        this.eventSource.addEventListener('xl2-data', (event) => {
+            const data = JSON.parse(event.data);
             if (typeof addConsoleMessage !== 'undefined') {
                 addConsoleMessage(data, 'rx', 'RX:');
             }
         });
 
-        this.socket.on(CONFIG.SOCKET_EVENTS.XL2_COMMAND, (command) => {
+        this.eventSource.addEventListener('xl2-command', (event) => {
+            const command = JSON.parse(event.data);
             if (typeof addConsoleMessage !== 'undefined') {
                 addConsoleMessage(command, 'tx', 'TX:');
             }
@@ -139,35 +148,28 @@ class ConnectionManager {
     }
 
     /**
-     * Emit connection request
+     * Send connection request via HTTP
      */
-    emitConnectionRequest(port) {
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                reject(new Error('Connection timeout'));
-            }, 10000); // 10 second timeout
+    async emitConnectionRequest(port) {
+        try {
+            const response = await fetch('/api/xl2/connect', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ port: port })
+            });
 
-            // Listen for connection result
-            const onConnected = () => {
-                clearTimeout(timeout);
-                this.socket.off(CONFIG.SOCKET_EVENTS.XL2_CONNECTED, onConnected);
-                this.socket.off(CONFIG.SOCKET_EVENTS.XL2_ERROR, onError);
-                resolve();
-            };
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error?.message || 'Connection failed');
+            }
 
-            const onError = (error) => {
-                clearTimeout(timeout);
-                this.socket.off(CONFIG.SOCKET_EVENTS.XL2_CONNECTED, onConnected);
-                this.socket.off(CONFIG.SOCKET_EVENTS.XL2_ERROR, onError);
-                reject(new Error(error));
-            };
-
-            this.socket.once(CONFIG.SOCKET_EVENTS.XL2_CONNECTED, onConnected);
-            this.socket.once(CONFIG.SOCKET_EVENTS.XL2_ERROR, onError);
-
-            // Send connection request
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_CONNECT, port);
-        });
+            const result = await response.json();
+            return result;
+        } catch (error) {
+            throw new Error(`Connection request failed: ${error.message}`);
+        }
     }
 
     /**
@@ -198,17 +200,27 @@ class ConnectionManager {
     /**
      * Disconnect from device
      */
-    disconnect() {
+    async disconnect() {
         try {
             ui.setButtonLoading('disconnectBtn', true, 'Disconnecting...');
             
             // Stop heartbeat
             this.stopHeartbeat();
             
-            // Emit disconnect request
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_DISCONNECT);
+            // Send disconnect request via HTTP
+            const response = await fetch('/api/xl2/disconnect', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error?.message || 'Disconnect failed');
+            }
             
-            // Update UI immediately (will be confirmed by server)
+            // Update UI immediately (will be confirmed by server via SSE)
             ui.showToast('Disconnecting from device...', 'info');
             
         } catch (error) {
@@ -230,6 +242,8 @@ class ConnectionManager {
         ui.setButtonLoading('connectBtn', false);
         ui.setButtonLoading('disconnectBtn', false);
         ui.updateStatusIndicator(true, `Connected to ${port}`);
+        
+        // Device info will be updated separately when xl2-device-info event is received
         
         // Update button states
         const connectBtn = document.getElementById('connectBtn');
@@ -284,6 +298,7 @@ class ConnectionManager {
         ui.setButtonLoading('connectBtn', false);
         ui.setButtonLoading('disconnectBtn', false);
         ui.updateStatusIndicator(false, 'Disconnected');
+        ui.updateDeviceInfo('No device connected');
         
         // Update button states
         const connectBtn = document.getElementById('connectBtn');
@@ -372,10 +387,24 @@ class ConnectionManager {
     /**
      * Scan for available ports
      */
-    refreshPorts() {
+    async refreshPorts() {
         try {
             ui.showToast('Scanning for available ports...', 'info');
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_LIST_PORTS);
+            
+            const response = await fetch('/api/xl2/ports', {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error?.message || 'Port scan failed');
+            }
+
+            const result = await response.json();
+            this.handlePortsReceived(result.ports || result);
         } catch (error) {
             console.error('Error refreshing ports:', error);
             ui.showToast('Error scanning ports', 'error');
@@ -385,7 +414,7 @@ class ConnectionManager {
     /**
      * Scan for XL2 devices
      */
-    scanForDevices() {
+    async scanForDevices() {
         try {
             const scanBtn = document.getElementById('scanBtn');
             const deviceSelect = document.getElementById('deviceSelect');
@@ -402,20 +431,37 @@ class ConnectionManager {
             ui.updateScanStatus('Scanning for XL2 devices...', 'scanning');
             ui.showToast('Scanning all COM ports for XL2 devices...', 'info');
             
-            // Emit scan request
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_SCAN_DEVICES);
-            
-            // Auto re-enable button after timeout
-            setTimeout(() => {
-                if (scanBtn) {
-                    ui.setButtonLoading('scanBtn', false);
+            // Send scan request via HTTP
+            const response = await fetch('/api/xl2/scan', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
                 }
-            }, CONFIG.CONNECTION.SCAN_TIMEOUT);
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error?.message || 'Device scan failed');
+            }
+
+            const result = await response.json();
+            this.handleDevicesFound(result.devices || result);
+            
+            // Re-enable scan button
+            if (scanBtn) {
+                ui.setButtonLoading('scanBtn', false);
+            }
             
         } catch (error) {
             console.error('Error scanning for devices:', error);
             ui.showToast('Error scanning for devices', 'error');
             ui.updateScanStatus('Scan failed', 'error');
+            
+            // Re-enable scan button on error
+            const scanBtn = document.getElementById('scanBtn');
+            if (scanBtn) {
+                ui.setButtonLoading('scanBtn', false);
+            }
         }
     }
 
@@ -467,7 +513,7 @@ class ConnectionManager {
     /**
      * Send command to device
      */
-    sendCommand(command) {
+    async sendCommand(command) {
         if (!this.isConnected) {
             ui.showToast('Not connected to XL2 device', 'error');
             return false;
@@ -479,7 +525,19 @@ class ConnectionManager {
         }
         
         try {
-            this.socket.emit(CONFIG.SOCKET_EVENTS.XL2_SEND_COMMAND, command.trim());
+            const response = await fetch('/api/xl2/command', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ command: command.trim() })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error?.message || 'Command failed');
+            }
+
             return true;
         } catch (error) {
             console.error('Error sending command:', error);
@@ -491,7 +549,7 @@ class ConnectionManager {
     /**
      * Send custom command from input field
      */
-    sendCustomCommand() {
+    async sendCustomCommand() {
         const input = document.getElementById('customCommand');
         if (!input) return;
         
@@ -502,7 +560,8 @@ class ConnectionManager {
             return;
         }
         
-        if (this.sendCommand(command)) {
+        const success = await this.sendCommand(command);
+        if (success) {
             input.value = '';
             ui.showToast(`Command sent: ${command}`, 'info');
         }
@@ -545,11 +604,23 @@ class ConnectionManager {
     startHeartbeat() {
         this.stopHeartbeat(); // Clear any existing heartbeat
         
-        this.heartbeatInterval = setInterval(() => {
+        this.heartbeatInterval = setInterval(async () => {
             if (this.isConnected) {
-                // Send a simple status query as heartbeat
-                this.socket.emit('heartbeat');
-                this.lastHeartbeat = Date.now();
+                try {
+                    // Send a simple status query as heartbeat via HTTP
+                    const response = await fetch('/api/xl2/status', {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        }
+                    });
+
+                    if (response.ok) {
+                        this.lastHeartbeat = Date.now();
+                    }
+                } catch (error) {
+                    console.debug('Heartbeat failed:', error.message);
+                }
             }
         }, CONFIG.CONNECTION.HEARTBEAT_INTERVAL);
     }
@@ -618,13 +689,42 @@ class ConnectionManager {
 
     /**
      * Request current status from server
-     * DISABLED: Server automatically sends status updates to avoid interfering with measurements
      */
-    requestCurrentStatus() {
-        // DISABLED: Don't request status to avoid interfering with ongoing measurements
-        // Server automatically sends current state to clients when they connect
-        console.log('🔄 Status requests disabled - server manages status automatically');
-        // this.socket.emit(CONFIG.SOCKET_EVENTS.REQUEST_CURRENT_STATUS);
+    async requestCurrentStatus() {
+        try {
+            const response = await fetch('/api/xl2/status', {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error?.message || 'Status request failed');
+            }
+
+            const status = await response.json();
+            
+            // Update local state based on server status
+            if (status.connected !== undefined) {
+                this.isConnected = status.connected;
+                this.currentPort = status.port;
+                this.deviceInfo = status.deviceInfo;
+                
+                // Update UI accordingly
+                if (status.connected) {
+                    this.handleConnectionSuccess(status.port);
+                } else {
+                    this.handleDisconnection();
+                }
+            }
+            
+            return status;
+        } catch (error) {
+            console.error('Error requesting status:', error);
+            return null;
+        }
     }
 }
 
