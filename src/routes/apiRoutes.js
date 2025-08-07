@@ -33,6 +33,12 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
   // XL2 specific routes
   router.get('/xl2/status', asyncHandler(async (req, res) => {
     const status = xl2.getStatus();
+    const gpsStatus = gpsLogger.getStatus();
+    
+    // Add logging status to XL2 status
+    status.isLogging = gpsStatus.logging.active;
+    status.loggingInfo = gpsStatus.logging;
+    
     res.json({
       success: true,
       data: status
@@ -96,7 +102,7 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
   }));
 
   router.get('/xl2/fft-frequencies', asyncHandler(async (req, res) => {
-    const frequencies = xl2.getFFTFrequencies();
+    const frequencies = xl2.getStoredFFTFrequencies();
     
     res.json({
       success: true,

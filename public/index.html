@@ -642,6 +642,76 @@
             border-radius: 8px;
             border: 1px solid #dee2e6;
         }
+
+        /* Map Styles */
+        .map-container {
+            margin-bottom: 30px;
+        }
+
+        #gpsMap {
+            height: 400px;
+            width: 100%;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+        }
+
+        .map-controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        .map-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+        }
+
+        .map-info-item {
+            text-align: center;
+        }
+
+        .map-info-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #495057;
+        }
+
+        .map-info-label {
+            font-size: 0.9em;
+            color: #6c757d;
+        }
+
+        .heatmap-legend {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+            font-size: 12px;
+            z-index: 1000;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 2px 0;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 15px;
+            margin-right: 5px;
+            border: 1px solid #ccc;
+        }
     </style>
 </head>
 <body>
@@ -679,6 +749,45 @@
                 <div class="measurement-item">
                     <div class="measurement-value" id="dbValue">--</div>
                     <div class="measurement-label">Level (dB)</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- GPS Map -->
+        <div class="card map-container">
+            <h2>🗺️ GPS Location & Noise Map</h2>
+            <div id="gpsMap"></div>
+            <div class="map-controls">
+                <button onclick="centerMapOnCurrentPosition()" class="btn btn-primary">📍 Center on Position</button>
+                <button onclick="loadCSVMarkers()" class="btn btn-info">📊 Load CSV Data</button>
+                <button onclick="clearMapMarkers()" class="btn btn-warning">🗑️ Clear Markers</button>
+                <button onclick="toggleHeatmap()" class="btn btn-secondary" id="heatmapToggle">🔥 Show Heatmap</button>
+                <button onclick="togglePathRecording()" class="btn btn-success" id="pathToggle">🛤️ Start Path</button>
+            </div>
+            <div class="map-info">
+                <div class="map-info-item">
+                    <div class="map-info-value" id="currentLat">--</div>
+                    <div class="map-info-label">Latitude</div>
+                </div>
+                <div class="map-info-item">
+                    <div class="map-info-value" id="currentLon">--</div>
+                    <div class="map-info-label">Longitude</div>
+                </div>
+                <div class="map-info-item">
+                    <div class="map-info-value" id="currentAlt">--</div>
+                    <div class="map-info-label">Altitude (m)</div>
+                </div>
+                <div class="map-info-item">
+                    <div class="map-info-value" id="pathDistance">0</div>
+                    <div class="map-info-label">Path (m)</div>
+                </div>
+                <div class="map-info-item">
+                    <div class="map-info-value" id="markerCount">0</div>
+                    <div class="map-info-label">Markers</div>
+                </div>
+                <div class="map-info-item">
+                    <div class="map-info-value" id="currentNoise">--</div>
+                    <div class="map-info-label">Current dB</div>
                 </div>
             </div>
         </div>
@@ -730,7 +839,20 @@
                         </div>
                         <div id="gpsConnectionInfo" style="margin-top: 5px; font-size: 0.9em; color: #666;">
                             Not connected
+                            
                         </div>
+                                    <!-- GPS Status -->
+   
+                
+                <div id="gpsInfo" class="device-info">
+                    
+                    <div>Latitude: <span id="gpsLat">--</span></div>
+                    <div>Longitude: <span id="gpsLon">--</span></div>
+                    <div>Altitude: <span id="gpsAlt">--</span> m</div>
+                    <div>Satellites: <span id="gpsSats">--</span></div>
+                    <div>Fix Quality: <span id="gpsFix">--</span></div>
+                </div>
+          
                     </div>
                 </div>
             </div>
@@ -750,244 +872,52 @@
             </div>
         </div>
 
-        <div class="control-panel">
-            <!-- FFT Info -->
-            <div class="card">
-                <h2>📊 FFT Info</h2>
-                <div id="fftInfo" class="device-info">
-                    <div>Frequency bins: <span id="fftBinCount">--</span></div>
-                    <div>Frequency range: <span id="fftRange">--</span></div>
-                    <div>12.5Hz bin: <span id="fft12_5Bin">--</span></div>
-                    <div>12.5Hz frequency: <span id="fft12_5Freq">--</span></div>
-                    <div>Update rate: <span id="fftUpdateRate">--</span></div>
-                </div>
-            </div>
-
-            <!-- Live FFT Display -->
-            <div class="card">
-                <h2>📈 Live FFT Spectrum</h2>
-                <div id="fftDisplay" class="fft-display">
-                    <canvas id="fftCanvas" width="800" height="300"></canvas>
-                    <div id="fftStatus" class="fft-status">Waiting for FFT data...</div>
-                </div>
-            </div>
-
-            <!-- GPS Status -->
-            <div class="card">
-                <h2>🛰️ GPS Status</h2>
-                <div id="gpsInfo" class="device-info">
-                    <div>Status: <span id="gpsStatus">Not connected</span></div>
-                    <div>Latitude: <span id="gpsLat">--</span></div>
-                    <div>Longitude: <span id="gpsLon">--</span></div>
-                    <div>Altitude: <span id="gpsAlt">--</span> m</div>
-                    <div>Satellites: <span id="gpsSats">--</span></div>
-                    <div>Fix Quality: <span id="gpsFix">--</span></div>
-                </div>
-            </div>
-
-            <!-- GPS Live Map -->
-            <div class="gps-map-container">
-                <div class="gps-map-header">
-                    <h3>🗺️ Live GPS Tracking</h3>
-                    <div class="map-controls">
-                        <button onclick="centerMapOnGPS()" class="btn btn-primary" id="centerMapBtn" disabled>📍 Center on GPS</button>
-                        <button onclick="clearTrack()" class="btn btn-warning" id="clearTrackBtn">🗑️ Clear Track</button>
-                        <button onclick="toggleTracking()" class="btn btn-success" id="trackingBtn">▶️ Start Tracking</button>
-                        <button onclick="toggleHeatmap()" class="btn btn-secondary" id="heatmapBtn">🔥 Show Heatmap</button>
-                        <button onclick="recalculateHeatmapData()" class="btn btn-info" id="recalcHeatmapBtn">🔄 Recalc Range</button>
-                        <button onclick="testHeatmap()" class="btn btn-warning" id="testHeatmapBtn">🧪 Test Heatmap</button>
-                        <button onclick="clearHeatmap()" class="btn btn-warning" id="clearHeatmapBtn">🗑️ Clear dB Data</button>
-                        <button onclick="loadCSVData()" class="btn btn-info" id="loadCSVBtn">📊 Load CSV Data</button>
-                    </div>
-                </div>
-                <div id="gpsMap"></div>
-                
-                <!-- Heatmap Controls -->
-                <div class="heatmap-controls">
-                    <div class="heatmap-toggle">
-                        <input type="checkbox" id="heatmapToggle" onchange="toggleHeatmapVisibility()">
-                        <label for="heatmapToggle">Show 12.5Hz dB Heatmap</label>
-                    </div>
-                    <div class="heatmap-legend">
-                        <span>Low dB</span>
-                        <div class="heatmap-gradient"></div>
-                        <span>High dB</span>
-                        <span id="heatmapRange">Range: -- to -- dB</span>
-                    </div>
-                    <div>
-                        <span>Points: <strong id="heatmapPoints">0</strong></span>
-                    </div>
-                </div>
-                
-                <div class="track-stats">
-                    <div class="track-stat">
-                        <div class="track-stat-value" id="trackDistance">0.0</div>
-                        <div class="track-stat-label">Distance (m)</div>
-                    </div>
-                    <div class="track-stat">
-                        <div class="track-stat-value" id="trackPoints">0</div>
-                        <div class="track-stat-label">Track Points</div>
-                    </div>
-                    <div class="track-stat">
-                        <div class="track-stat-value" id="currentSpeed">0.0</div>
-                        <div class="track-stat-label">Speed (km/h)</div>
-                    </div>
-                    <div class="track-stat">
-                        <div class="track-stat-value" id="maxSpeed">0.0</div>
-                        <div class="track-stat-label">Max Speed (km/h)</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Logging Status -->
-            <div class="card">
-                <h2>📝 CSV Logging</h2>
-                <div id="loggingInfo" class="device-info">
-                    <div>Status: <span id="loggingStatus">Stopped</span></div>
-                    <div>File: <span id="loggingFile">--</span></div>
-                    <div>Started: <span id="loggingStartTime">--</span></div>
-                    <div>Records: <span id="loggingRecords">--</span></div>
-                </div>
-            </div>
+       <div class="control-panel">
+    <!-- Logging Control (Fixed API Endpoints) -->
+    <div class="card">
+        <h2>📝 CSV Logging Control</h2>
+        <div id="loggingStatus" class="alert alert-secondary" style="margin-bottom: 10px; font-size: 0.9em;">
+            📊 Status: <span id="loggingStatusText">Checking...</span>
         </div>
+        <div class="button-group">
+            <button onclick="startLogging()" id="startLogBtn" class="btn btn-success">▶️ Start Logging</button>
+            <button onclick="stopLogging()" id="stopLogBtn" class="btn btn-warning">⏹️ Stop Logging</button>
+        </div>
+        <div class="alert alert-info" style="margin-top: 10px; font-size: 0.9em;">
+            📊 Logs: Datum, Uhrzeit, 12.5Hz Pegel, GPS Koordinaten<br>
+            📁 Files saved to: <code>logs/Log_YYYY-MM-DD-HH-mm-ss.csv</code>
+        </div>
+    </div>
+
+    <!-- Custom Command (Working) -->
+    <div class="card">
+        <h2>⌨️ Custom Command</h2>
+        <div class="input-group">
+            <input type="text" id="customCommand" placeholder="Enter XL2 command..." class="input">
+            <button onclick="sendCustomCommand()" class="btn btn-primary">Send</button>
+        </div>
+        <div class="alert alert-info" style="margin-top: 10px; font-size: 0.9em;">
+            💡 Examples: *IDN?, MEAS:FFT:F?, MEAS:FFT? LIVE
+        </div>
+    </div>
+</div>
+
 
         <div class="control-panel">
-            <!-- Connection Control -->
-            <div class="card">
-                <h2>🔌 Connection</h2>
-                
-                <!-- Status Refresh -->
-                <div class="input-group">
-                    <button onclick="refreshStatus()" class="btn btn-info">🔄 Refresh Status</button>
-                    <button onclick="scanForDevices()" id="scanBtn" class="btn btn-warning">🔍 Scan All COM Ports</button>
-                    <span id="scanStatus" style="margin-left: 10px; font-style: italic;"></span>
-                </div>
-                
-                <!-- Manual Port Selection (fallback) -->
-                <div class="input-group" style="margin-top: 15px;">
-                    <label for="portSelect" style="display: block; margin-bottom: 5px; font-weight: bold;">🔧 Manual Port Selection (if scan fails):</label>
-                    <div style="display: flex; gap: 10px;">
-<select id="portSelect" class="select" style="flex: 1;">
-                            <option value="">Select COM port manually...</option>
-                        </select>
-                        <button onclick="refreshPorts()" class="btn btn-secondary">Refresh</button>
-                    </div>
-                </div>
-                
-                <div class="button-group">
-                    <button onclick="connect()" id="connectBtn" class="btn btn-primary">Connect Selected</button>
-                    <button onclick="disconnect()" id="disconnectBtn" class="btn btn-secondary" disabled>Disconnect</button>
-                </div>
-                
-                <!-- Connection Status -->
-                <div class="alert alert-info" style="margin-top: 15px;">
-                    <strong>🔌 Status:</strong> <span id="connectionStatusText">Server manages connections automatically</span>
-                </div>
-            </div>
 
-            <!-- Quick Commands -->
-            <div class="card">
-                <h2>⚡ Quick Commands</h2>
-                <div class="button-group">
-                    <button onclick="sendCommand('*IDN?')" class="btn btn-success">Device Info</button>
-                    <button onclick="initializeFFT()" class="btn btn-warning">🔧 Re-init FFT</button>
-                    <button onclick="getDeviceStatus()" class="btn btn-success">Status</button>
-                    <button onclick="sendCommand('*RST')" class="btn btn-secondary">Reset</button>
-                </div>
-                <div class="alert alert-info" style="margin-top: 10px; font-size: 0.9em;">
-                    ℹ️ FFT measurements start automatically on connection
-                </div>
-            </div>
-
-            <!-- FFT Control -->
-            <div class="card">
-                <h2>📊 FFT Control</h2>
-                <div class="button-group">
-                    <button onclick="getFFTFrequencies()" class="btn btn-primary">Get Frequencies</button>
-                    <button onclick="getFFTSpectrum()" class="btn btn-primary">Get Spectrum</button>
-                    <button onclick="setFrequency(12.5)" class="btn btn-warning">Set 12.5 Hz Context</button>
-                    <button onclick="drawTestSpectrum()" class="btn btn-secondary">Test Canvas</button>
-                    <button onclick="forceCanvasTest()" class="btn btn-info">Force Canvas Test</button>
-                </div>
-                <div class="input-group">
-                    <input type="number" id="zoomInput" placeholder="9" class="input" min="0" max="15">
-                    <button onclick="setFFTZoom()" class="btn btn-secondary">Set Zoom</button>
-                </div>
-                <div class="input-group">
-                    <input type="number" id="fstartInput" placeholder="12.5" class="input" min="0" step="0.1">
-                    <button onclick="setFFTStart()" class="btn btn-secondary">Set F Start</button>
-                </div>
-                <div class="alert alert-info" style="margin-top: 10px; font-size: 0.9em;">
-                    ℹ️ Default FSTART = 12.5 Hz (first bin = 12.5Hz exactly)<br>
-                    🔄 Frequencies auto-retrieved after zoom/fstart changes
-                </div>
-            </div>
-
-            <!-- Measurement Control -->
-            <div class="card">
-                <h2>📈 Live FFT Control</h2>
-                <div class="button-group">
-                    <button onclick="startContinuousFFT()" id="startFFTBtn" class="btn btn-success">▶️ Start Live FFT</button>
-                    <button onclick="stopContinuousFFT()" id="stopFFTBtn" class="btn btn-warning">⏹️ Stop Live FFT</button>
-                    <button onclick="triggerMeasurement()" class="btn btn-primary">🔄 Manual Trigger</button>
-                </div>
-                <div class="alert alert-info" style="margin-top: 10px; font-size: 0.9em;">
-                    ℹ️ Live FFT triggers new measurements every 1.5 seconds
-                </div>
-            </div>
-
-            <!-- GPS Control -->
-            <div class="card">
-                <h2>🛰️ GPS Control</h2>
-                
-                <div class="input-group">
-                    <button onclick="scanGPS()" id="gpsScanBtn" class="btn btn-warning">🔍 Scan GPS Ports</button>
-                    <span id="gpsScanStatus" style="margin-left: 10px; font-style: italic;"></span>
-                </div>
-                
-                <div class="input-group">
-                    <label for="gpsSelect" style="display: block; margin-bottom: 5px; font-weight: bold;">📡 GPS Ports:</label>
-                    <select id="gpsSelect" class="select" size="2" style="height: 60px;">
-                        <option value="">Click "Scan GPS Ports" to find VK-162</option>
-                    </select>
-                </div>
-                
-                <div class="button-group">
-                    <button onclick="connectGPS()" id="gpsConnectBtn" class="btn btn-primary">Connect GPS</button>
-                    <button onclick="disconnectGPS()" id="gpsDisconnectBtn" class="btn btn-secondary" disabled>Disconnect GPS</button>
-                </div>
-            </div>
-
-            <!-- Logging Control -->
-            <div class="card">
-                <h2>📝 CSV Logging Control</h2>
-                <div class="button-group">
-                    <button onclick="startLogging()" id="startLogBtn" class="btn btn-success">▶️ Start Logging</button>
-                    <button onclick="stopLogging()" id="stopLogBtn" class="btn btn-warning" disabled>⏹️ Stop Logging</button>
-                </div>
-                <div class="alert alert-info" style="margin-top: 10px; font-size: 0.9em;">
-                    📊 Logs: Datum, Uhrzeit, 12.5Hz Pegel, GPS Koordinaten<br>
-                    📁 Files saved to: <code>logs/Log_YYYY-MM-DD-HH-mm-ss.csv</code>
-                </div>
-            </div>
-
-            <!-- Custom Command -->
+            <!-- Custom Command (Working) -->
             <div class="card">
                 <h2>⌨️ Custom Command</h2>
                 <div class="input-group">
-                    <input type="text" id="customCommand" placeholder="Enter command..." class="input">
+                    <input type="text" id="customCommand" placeholder="Enter XL2 command..." class="input">
                     <button onclick="sendCustomCommand()" class="btn btn-primary">Send</button>
+                </div>
+                <div class="alert alert-info" style="margin-top: 10px; font-size: 0.9em;">
+                    💡 Examples: *IDN?, MEAS:FFT:F?, MEAS:FFT? LIVE
                 </div>
             </div>
         </div>
 
-        <!-- Console -->
-        <div class="card">
-            <h2>🖥️ Console</h2>
-            <div class="console" id="console"></div>
-            <button onclick="clearConsole()" class="btn btn-secondary" style="margin-top: 10px;">Clear Console</button>
-        </div>
-    </div>
 
     <!-- Include JavaScript modules -->
     <script src="js/utils.js?v=20250805-1600"></script>

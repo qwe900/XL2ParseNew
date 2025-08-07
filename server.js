@@ -135,13 +135,101 @@ class XL2WebServer {
     this.startupService = new StartupService(startupEventEmitter);
     
     // Set up measurement logging callback
-    this.xl2.onMeasurement = async (dbValue) => {
+    this.xl2.onMeasurement = async (dbValue, fullMeasurement) => {
       if (this.gpsLogger.isLogging) {
-        await this.gpsLogger.logMeasurement(dbValue);
+        await this.gpsLogger.logMeasurement(dbValue, fullMeasurement);
       }
     };
     
+    // Set up automatic logging when conditions are met
+    this.setupAutomaticLogging();
+    
     logger.info('✅ Services initialized');
+  }
+
+  /**
+   * Setup automatic logging when GPS and XL2 conditions are met
+   */
+  setupAutomaticLogging() {
+    logger.info('🤖 Setting up automatic CSV logging...');
+    
+    // Track the state of both devices
+    let xl2Measuring = false;
+    let gpsHasPosition = false;
+    let autoLoggingStarted = false;
+    
+    // Check conditions and start/stop logging
+    const checkAndToggleLogging = () => {
+      const shouldLog = xl2Measuring && gpsHasPosition;
+      
+      if (shouldLog && !this.gpsLogger.isLogging && !autoLoggingStarted) {
+        logger.info('🚀 Auto-starting CSV logging: XL2 measuring + GPS position available');
+        this.gpsLogger.startLogging();
+        autoLoggingStarted = true;
+      } else if (!shouldLog && this.gpsLogger.isLogging && autoLoggingStarted) {
+        logger.info('⏹️ Auto-stopping CSV logging: Conditions no longer met');
+        this.gpsLogger.stopLogging();
+        autoLoggingStarted = false;
+      }
+    };
+    
+    // Listen for XL2 measurement events
+    this.xl2.eventEmitter?.on('xl2-measurement', (measurement) => {
+      if (!xl2Measuring) {
+        xl2Measuring = true;
+        logger.info('📊 XL2 measurements detected');
+        checkAndToggleLogging();
+      }
+    });
+    
+    // Listen for XL2 disconnection
+    this.xl2.eventEmitter?.on('xl2-disconnected', () => {
+      if (xl2Measuring) {
+        xl2Measuring = false;
+        logger.info('📊 XL2 measurements stopped');
+        checkAndToggleLogging();
+      }
+    });
+    
+    // Listen for GPS position updates
+    this.gpsLogger.eventEmitter?.on('gps-location-update', (location) => {
+      if (!gpsHasPosition && location.latitude && location.longitude) {
+        gpsHasPosition = true;
+        logger.info('🛰️ GPS position acquired');
+        checkAndToggleLogging();
+      }
+    });
+    
+    // Listen for GPS disconnection
+    this.gpsLogger.eventEmitter?.on('gps-disconnected', () => {
+      if (gpsHasPosition) {
+        gpsHasPosition = false;
+        logger.info('🛰️ GPS position lost');
+        checkAndToggleLogging();
+      }
+    });
+    
+    // Periodic check every 30 seconds to ensure we don't miss state changes
+    setInterval(() => {
+      const currentXL2State = this.xl2.isConnected && this.xl2.isMeasuring;
+      const currentGPSState = this.gpsLogger.isGPSConnected && 
+                             this.gpsLogger.currentLocation.latitude && 
+                             this.gpsLogger.currentLocation.longitude;
+      
+      if (currentXL2State !== xl2Measuring) {
+        xl2Measuring = currentXL2State;
+        logger.debug(`🔄 XL2 state updated: ${xl2Measuring ? 'measuring' : 'not measuring'}`);
+        checkAndToggleLogging();
+      }
+      
+      if (currentGPSState !== gpsHasPosition) {
+        gpsHasPosition = currentGPSState;
+        logger.debug(`🔄 GPS state updated: ${gpsHasPosition ? 'has position' : 'no position'}`);
+        checkAndToggleLogging();
+      }
+    }, 30000);
+    
+    logger.info('✅ Automatic CSV logging configured');
   }
 
   /**
@@ -340,11 +428,14 @@ class XL2WebServer {
       console.log('🔍 Auto-detect:', this.config.serial.xl2.autoDetect);
       console.log('');
       console.log('🎯 Special focus: 12.5Hz dB measurements');
-      console.log('📊 Web interface available at: http://your-ip:' + this.config.server.port);
+      console.log('📊 Web interface available at: http://localhost:' + this.config.server.port);
       console.log('');
 
       // Execute automatic device detection and connection
       await this.executeDeviceStartupSequence();
+
+      // Setup automatic reconnection system
+      this.setupDeviceReconnectionSystem();
 
     } catch (error) {
       logger.error('❌ Failed to start server', error);
@@ -417,91 +508,131 @@ class XL2WebServer {
   }
 
   /**
-   * Setup periodic check for XL2 reconnection
+   * Setup automatic device reconnection system
    */
-  setupXL2ReconnectionCheck() {
-    // DISABLED: Auto-reconnection completely disabled to prevent measurement interference
-    logger.info('🔍 XL2 auto-reconnection DISABLED - manual connection required to prevent measurement interference');
-    return;
-    
-    // Original code commented out to prevent any automatic device operations
-    /*
+  setupDeviceReconnectionSystem() {
     // Allow disabling auto-reconnection via environment variable
-    if (process.env.DISABLE_XL2_AUTO_RECONNECT === 'true') {
-      logger.info('🔍 XL2 auto-reconnection disabled via environment variable');
+    if (process.env.DISABLE_AUTO_RECONNECT === 'true') {
+      logger.info('🔍 Auto-reconnection disabled via environment variable');
       return;
     }
-    
+
+    let reconnectionInProgress = false;
     let reconnectionAttempts = 0;
-    let isReconnecting = false; // Prevent concurrent reconnection attempts
-    const maxReconnectionAttempts = 10; // Stop after 10 failed attempts
-    
-    // Check every 60 seconds if XL2 is disconnected (reduced frequency)
-    setInterval(async () => {
-      const isConnected = this.xl2.isConnected;
-      const currentPort = this.xl2.port?.path;
-      
-      if (!isConnected && this.config.serial.xl2.autoDetect && !isReconnecting) {
-        // Stop trying after max attempts to avoid spam
-        if (reconnectionAttempts >= maxReconnectionAttempts) {
-          logger.info(`🔍 XL2 reconnection stopped after ${maxReconnectionAttempts} attempts. Manual connection required.`);
-          return;
-        }
-        
-        isReconnecting = true;
-        reconnectionAttempts++;
-        logger.info(`🔍 XL2 not connected, searching for devices... (attempt ${reconnectionAttempts}/${maxReconnectionAttempts})`);
-        
-        try {
-          await this.autoConnectXL2();
-          // Reset counter on successful connection
-          if (this.xl2.isConnected) {
-            reconnectionAttempts = 0;
-            logger.info(`✅ XL2 reconnection successful`);
-          }
-        } catch (error) {
-          logger.debug('XL2 reconnection attempt failed', {
-            error: error.message,
-            attempt: reconnectionAttempts,
-            maxAttempts: maxReconnectionAttempts
-          });
-        } finally {
-          isReconnecting = false;
-        }
-      } else if (isConnected) {
-        // Reset counter if XL2 is connected
+    const maxReconnectionAttempts = 5;
+    const reconnectionDelay = 10000; // 10 seconds between attempts
+
+    logger.info('🔍 Setting up automatic device reconnection system');
+
+    // Monitor device disconnections and trigger reconnection
+    const checkAndReconnect = async () => {
+      if (reconnectionInProgress) {
+        return; // Already attempting reconnection
+      }
+
+      const xl2Connected = this.xl2.isConnected;
+      const gpsConnected = this.gpsLogger.isGPSConnected;
+
+      // If both devices are connected, reset attempt counter
+      if (xl2Connected && gpsConnected) {
         if (reconnectionAttempts > 0) {
-          logger.debug(`✅ XL2 connected to ${currentPort}, resetting reconnection counter`);
+          logger.info('✅ All devices reconnected successfully, resetting attempt counter');
           reconnectionAttempts = 0;
         }
+        return;
       }
-    }, 60000); // Check every 60 seconds (reduced from 30)
-    */
+
+      // If any device is disconnected and we haven't exceeded max attempts
+      if ((!xl2Connected || !gpsConnected) && reconnectionAttempts < maxReconnectionAttempts) {
+        reconnectionInProgress = true;
+        reconnectionAttempts++;
+
+        logger.warn(`🔄 Device disconnection detected, starting reconnection attempt ${reconnectionAttempts}/${maxReconnectionAttempts}`);
+        logger.info(`📊 Device Status: XL2=${xl2Connected ? 'Connected' : 'Disconnected'}, GPS=${gpsConnected ? 'Connected' : 'Disconnected'}`);
+
+        // Broadcast reconnection status to clients
+        this.sseService.broadcast('device-reconnection-started', {
+          attempt: reconnectionAttempts,
+          maxAttempts: maxReconnectionAttempts,
+          xl2Connected,
+          gpsConnected,
+          timestamp: new Date().toISOString()
+        });
+
+        try {
+          // Execute the full startup sequence to reconnect devices
+          await this.executeDeviceStartupSequence();
+          
+          // Check if reconnection was successful
+          const xl2Reconnected = this.xl2.isConnected;
+          const gpsReconnected = this.gpsLogger.isGPSConnected;
+          
+          if (xl2Reconnected && gpsReconnected) {
+            logger.info('✅ Device reconnection successful - all devices connected');
+            reconnectionAttempts = 0; // Reset counter on success
+            
+            this.sseService.broadcast('device-reconnection-success', {
+              xl2Connected: xl2Reconnected,
+              gpsConnected: gpsReconnected,
+              timestamp: new Date().toISOString()
+            });
+          } else {
+            logger.warn(`⚠️ Partial reconnection: XL2=${xl2Reconnected ? 'Connected' : 'Failed'}, GPS=${gpsReconnected ? 'Connected' : 'Failed'}`);
+            
+            this.sseService.broadcast('device-reconnection-partial', {
+              attempt: reconnectionAttempts,
+              maxAttempts: maxReconnectionAttempts,
+              xl2Connected: xl2Reconnected,
+              gpsConnected: gpsReconnected,
+              timestamp: new Date().toISOString()
+            });
+          }
+
+        } catch (error) {
+          logger.error(`❌ Device reconnection attempt ${reconnectionAttempts} failed:`, error.message);
+          
+          this.sseService.broadcast('device-reconnection-failed', {
+            attempt: reconnectionAttempts,
+            maxAttempts: maxReconnectionAttempts,
+            error: error.message,
+            timestamp: new Date().toISOString()
+          });
+        } finally {
+          reconnectionInProgress = false;
+        }
+      } else if (reconnectionAttempts >= maxReconnectionAttempts) {
+        logger.warn(`⚠️ Maximum reconnection attempts (${maxReconnectionAttempts}) reached. Manual intervention required.`);
+        
+        this.sseService.broadcast('device-reconnection-exhausted', {
+          maxAttempts: maxReconnectionAttempts,
+          xl2Connected: this.xl2.isConnected,
+          gpsConnected: this.gpsLogger.isGPSConnected,
+          timestamp: new Date().toISOString()
+        });
+      }
+    };
+
+    // Check for disconnections every 15 seconds
+    setInterval(checkAndReconnect, 15000);
+
+    // Also trigger immediate check on device disconnect events
+    this.xl2.eventEmitter?.on('xl2-disconnected', () => {
+      logger.warn('🔌 XL2 disconnected - triggering reconnection check');
+      setTimeout(checkAndReconnect, 2000); // Small delay to allow cleanup
+    });
+
+    // Note: GPS disconnect events would need to be added to GPSLogger if not already present
+    if (this.gpsLogger.eventEmitter) {
+      this.gpsLogger.eventEmitter.on('gps-disconnected', () => {
+        logger.warn('🛰️ GPS disconnected - triggering reconnection check');
+        setTimeout(checkAndReconnect, 2000); // Small delay to allow cleanup
+      });
+    }
+
+    logger.info('✅ Automatic device reconnection system configured');
   }
 
-  /**
-   * Setup periodic check for GPS reconnection
-   */
-  setupGPSReconnectionCheck() {
-    // DISABLED: GPS auto-reconnection disabled to prevent any interference
-    logger.info('🛰️ GPS auto-reconnection DISABLED - manual connection required');
-    return;
-    
-    // Original code commented out
-    /*
-    // Check every 45 seconds if GPS is disconnected (offset from XL2 check)
-    setInterval(async () => {
-      if (!this.gpsLogger.isGPSConnected && this.config.serial.gps.autoConnect) {
-        logger.info('🛰️ GPS not connected, searching for devices...');
-        try {
-          await this.autoConnectGPS();
-        } catch (error) {
-          logger.debug('GPS reconnection attempt failed', { error: error.message });
-        }
-      }
-    }, 45000); // Check every 45 seconds (offset from XL2)
-    */
-  }
+
 
   /**
    * Setup device status callback for new SSE clients
@@ -519,6 +650,10 @@ class XL2WebServer {
           connected: this.gpsLogger.isGPSConnected,
           port: this.gpsLogger.gpsPort?.path || null,
           location: this.gpsLogger.getCurrentLocation()
+        },
+        startup: {
+          completed: this.startupService.isStartupCompleted(),
+          results: this.startupService.getStartupResults()
         }
       };
     });
@@ -634,8 +769,19 @@ class XL2WebServer {
       this.sseService.broadcast('gps-connection-status', data);
     });
 
-    this.startupService.eventEmitter.on('startup-completed', (data) => {
-      this.sseService.broadcast('startup-completed', data);
+    // Forward startup phase updates (scanning, connecting, finalizing)
+    this.startupService.eventEmitter.on('startup-phase', (data) => {
+      this.sseService.broadcast('startup-phase', data);
+    });
+
+    // Forward startup completion (correct event name)
+    this.startupService.eventEmitter.on('startup-complete', (data) => {
+      this.sseService.broadcast('startup-complete', data);
+    });
+
+    // Forward startup errors
+    this.startupService.eventEmitter.on('startup-error', (data) => {
+      this.sseService.broadcast('startup-error', data);
     });
   }
 

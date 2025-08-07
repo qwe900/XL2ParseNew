@@ -3,12 +3,12 @@
  */
 
 export const TIMEOUTS = {
-  PORT_SCAN: 2000,
-  DEVICE_RESPONSE: 3000,
+  PORT_SCAN: 800,        // Reduced from 2000ms to 800ms
+  DEVICE_RESPONSE: 1200, // Reduced from 3000ms to 1200ms
   CONNECTION: 3000,
   COMMAND_RESPONSE: 5000,
   FFT_MEASUREMENT: 1500,
-  GPS_CONNECTION: 3000
+  GPS_CONNECTION: 1500   // Reduced from 3000ms to 1500ms
 };
 
 export const INTERVALS = {

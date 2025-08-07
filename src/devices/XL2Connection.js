@@ -634,7 +634,7 @@ export class XL2Connection {
 
     // Log measurement if callback provided
     if (hz12_5Info.value !== null && this.onMeasurement) {
-      await this.onMeasurement(hz12_5Info.value);
+      await this.onMeasurement(hz12_5Info.value, measurement);
     }
   }
 
@@ -882,6 +882,14 @@ export class XL2Connection {
     }
     
     await this.sendCommand('MEAS:FFT:F?');
+  }
+
+  /**
+   * Get stored FFT frequencies
+   * @returns {Array|null} Array of frequencies or null if not available
+   */
+  getStoredFFTFrequencies() {
+    return this.fftFrequencies;
   }
 
   /**

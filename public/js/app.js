@@ -426,6 +426,12 @@ class XL2Application {
             // Mark as initialized
             this.isInitialized = true;
             
+            // Initialize logging status
+            updateLoggingStatus();
+            
+            // Setup periodic logging status updates (every 30 seconds)
+            setInterval(updateLoggingStatus, 30000);
+            
             // Log initialization time
             const initTime = Date.now() - this.startTime;
             console.log(`✅ Application fully loaded in ${initTime}ms (mobile: ${isMobile})`);
@@ -978,11 +984,7 @@ function disconnect() {
     }
 }
 
-function refreshPorts() {
-    if (window.app && window.app.connectionManager) {
-        return window.app.connectionManager.refreshPorts();
-    }
-}
+// refreshPorts function removed - server manages ports automatically
 
 function refreshStatus() {
     // Server manages status updates automatically
@@ -990,11 +992,7 @@ function refreshStatus() {
     console.log('📊 Status refresh requested - server handles this automatically');
 }
 
-function scanForDevices() {
-    if (window.app && window.app.connectionManager) {
-        return window.app.connectionManager.scanForDevices();
-    }
-}
+// scanForDevices function removed - server manages device detection automatically
 
 function sendCommand(command) {
     if (window.app && window.app.connectionManager) {
@@ -1020,17 +1018,6 @@ function initializeFFT() {
     }
 }
 
-function getFFTFrequencies() {
-    if (window.app && window.app.fftManager) {
-        return window.app.fftManager.getFrequencies();
-    }
-}
-
-function getFFTSpectrum() {
-    if (window.app && window.app.fftManager) {
-        return window.app.fftManager.getSpectrum();
-    }
-}
 
 function setFFTZoom() {
     if (window.app && window.app.fftManager) {
@@ -1056,11 +1043,7 @@ function stopContinuousFFT() {
     }
 }
 
-function triggerMeasurement() {
-    if (window.app && window.app.fftManager) {
-        return window.app.fftManager.triggerMeasurement();
-    }
-}
+// triggerMeasurement function removed - not implemented in API
 
 function drawTestSpectrum() {
     if (window.app && window.app.fftManager) {
@@ -1068,15 +1051,31 @@ function drawTestSpectrum() {
     }
 }
 
-function forceCanvasTest() {
-    if (window.app && window.app.fftManager) {
-        return window.app.fftManager.forceCanvasTest();
-    }
-}
+// forceCanvasTest function removed - not implemented in API
 
-function setFrequency(freq) {
-    if (window.app && window.app.connectionManager) {
-        return window.app.connectionManager.sendCommand(`FREQ ${freq}`);
+// setFrequency function updated to use correct API endpoint
+async function setFrequency(freq) {
+    try {
+        const response = await fetch('/api/frequency', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ frequency: freq })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error?.message || 'Failed to set frequency');
+        }
+
+        const result = await response.json();
+        ui.showToast(`Frequency context set to ${freq} Hz`, 'success');
+        return result;
+    } catch (error) {
+        console.error('Error setting frequency:', error);
+        ui.showToast('Failed to set frequency', 'error');
+        return false;
     }
 }
 
@@ -1127,17 +1126,9 @@ function toggleHeatmapVisibility() {
     return toggleHeatmap();
 }
 
-function recalculateHeatmapData() {
-    if (window.app && window.app.gpsManager) {
-        return window.app.gpsManager.recalculateHeatmapData();
-    }
-}
+// recalculateHeatmapData function removed - not implemented in API
 
-function testHeatmap() {
-    if (window.app && window.app.gpsManager) {
-        return window.app.gpsManager.testHeatmap();
-    }
-}
+// testHeatmap function removed - not implemented in API
 
 function clearHeatmap() {
     if (window.app && window.app.gpsManager) {
@@ -1151,10 +1142,10 @@ function loadCSVData() {
     }
 }
 
-// Logging functions
+// Logging functions - Fixed to use correct API endpoints
 async function startLogging() {
     try {
-        const response = await fetch('/api/gps/logging/start', {
+        const response = await fetch('/api/logging/start', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -1168,6 +1159,10 @@ async function startLogging() {
 
         const result = await response.json();
         ui.showToast('Logging started', 'success');
+        
+        // Update logging status immediately
+        updateLoggingStatus();
+        
         return result;
     } catch (error) {
         console.error('Error starting logging:', error);
@@ -1178,7 +1173,7 @@ async function startLogging() {
 
 async function stopLogging() {
     try {
-        const response = await fetch('/api/gps/logging/stop', {
+        const response = await fetch('/api/logging/stop', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -1192,11 +1187,82 @@ async function stopLogging() {
 
         const result = await response.json();
         ui.showToast('Logging stopped', 'success');
+        
+        // Update logging status immediately
+        updateLoggingStatus();
+        
         return result;
     } catch (error) {
         console.error('Error stopping logging:', error);
         ui.showToast('Failed to stop logging', 'error');
         return false;
+    }
+}
+
+// Function to update logging status display
+async function updateLoggingStatus() {
+    try {
+        const response = await fetch('/api/xl2/status');
+        if (!response.ok) {
+            throw new Error('Failed to fetch status');
+        }
+        
+        const result = await response.json();
+        const isLogging = result.data.isLogging;
+        const loggingInfo = result.data.loggingInfo;
+        
+        // Update both status displays
+        const statusElements = [
+            { status: document.getElementById('loggingStatus'), text: document.getElementById('loggingStatusText') },
+            { status: document.getElementById('loggingStatus2'), text: document.getElementById('loggingStatusText2') }
+        ];
+        
+        statusElements.forEach(({ status, text }) => {
+            if (status && text) {
+                if (isLogging) {
+                    status.className = 'alert alert-success';
+                    const startTime = loggingInfo.startTime ? new Date(loggingInfo.startTime).toLocaleTimeString() : 'Unknown';
+                    text.textContent = `🟢 Logging Active (Started: ${startTime})`;
+                } else {
+                    status.className = 'alert alert-secondary';
+                    text.textContent = '⚪ Logging Inactive';
+                }
+            }
+        });
+        
+        // Update button states
+        const startButtons = [document.getElementById('startLogBtn'), document.getElementById('startLogBtn2')];
+        const stopButtons = [document.getElementById('stopLogBtn'), document.getElementById('stopLogBtn2')];
+        
+        startButtons.forEach(btn => {
+            if (btn) {
+                btn.disabled = isLogging;
+                btn.className = isLogging ? 'btn btn-success disabled' : 'btn btn-success';
+            }
+        });
+        
+        stopButtons.forEach(btn => {
+            if (btn) {
+                btn.disabled = !isLogging;
+                btn.className = !isLogging ? 'btn btn-warning disabled' : 'btn btn-warning';
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error updating logging status:', error);
+        
+        // Show error state
+        const statusElements = [
+            { status: document.getElementById('loggingStatus'), text: document.getElementById('loggingStatusText') },
+            { status: document.getElementById('loggingStatus2'), text: document.getElementById('loggingStatusText2') }
+        ];
+        
+        statusElements.forEach(({ status, text }) => {
+            if (status && text) {
+                status.className = 'alert alert-danger';
+                text.textContent = '❌ Status Check Failed';
+            }
+        });
     }
 }
 

@@ -30,6 +30,7 @@ class GPSLogger {
     this.csvWriter = null;
     this.logFilePath = null;
     this.logStartTime = null;
+    this.spectrumSize = 200; // Default size, will be updated based on actual data
     
     this.setupGPSParser();
     this.createLogsDirectory();
@@ -375,25 +376,37 @@ class GPSLogger {
     // Check if file exists to determine if we need headers
     const fileExists = fs.existsSync(this.logFilePath);
 
+    // Create dynamic header for full spectrum logging
+    const baseHeaders = [
+      { id: 'datum', title: 'Datum' },
+      { id: 'uhrzeit', title: 'Uhrzeit' },
+      { id: 'pegel_db', title: 'Pegel_12.5Hz_dB' },
+      { id: 'latitude', title: 'GPS_Latitude' },
+      { id: 'longitude', title: 'GPS_Longitude' },
+      { id: 'altitude', title: 'GPS_Altitude_m' },
+      { id: 'satellites', title: 'GPS_Satellites' },
+      { id: 'gps_fix', title: 'GPS_Fix_Quality' }
+    ];
+
+    // Add spectrum columns (dynamic based on actual FFT size)
+    const spectrumHeaders = [];
+    for (let i = 0; i < this.spectrumSize; i++) {
+      spectrumHeaders.push({ id: `spectrum_${i}`, title: `Spectrum_Bin_${i}_dB` });
+    }
+
+    const allHeaders = [...baseHeaders, ...spectrumHeaders];
+
     // Create CSV writer with append mode
     this.csvWriter = createCsvWriter.createObjectCsvWriter({
       path: this.logFilePath,
-      header: [
-        { id: 'datum', title: 'Datum' },
-        { id: 'uhrzeit', title: 'Uhrzeit' },
-        { id: 'pegel_db', title: 'Pegel_12.5Hz_dB' },
-        { id: 'latitude', title: 'GPS_Latitude' },
-        { id: 'longitude', title: 'GPS_Longitude' },
-        { id: 'altitude', title: 'GPS_Altitude_m' },
-        { id: 'satellites', title: 'GPS_Satellites' },
-        { id: 'gps_fix', title: 'GPS_Fix_Quality' }
-      ],
+      header: allHeaders,
       encoding: 'utf8',
       append: fileExists // Append if file exists, create with headers if not
     });
 
     this.isLogging = true;
     console.log(`📝 ${fileExists ? 'Appending to existing' : 'Creating new'} log file: ${this.logFilePath}`);
+    console.log(`📊 Full spectrum logging enabled (${this.spectrumSize} frequency bins)`);
     this._emitEvent('gps-logging-started', {
       filePath: this.logFilePath,
       startTime: this.logStartTime,
@@ -425,7 +438,7 @@ class GPSLogger {
     return logInfo;
   }
 
-  async logMeasurement(pegelValue) {
+  async logMeasurement(pegelValue, fullMeasurement = null) {
     if (!this.isLogging || !this.csvWriter) {
       return;
     }
@@ -445,9 +458,35 @@ class GPSLogger {
       gps_fix: this.currentLocation.fix || 'N/A'
     };
 
+    // Add full spectrum data if available
+    if (fullMeasurement && fullMeasurement.spectrum && Array.isArray(fullMeasurement.spectrum)) {
+      // Update spectrum size if we get more data than expected
+      if (fullMeasurement.spectrum.length > this.spectrumSize) {
+        console.log(`📊 Updating spectrum size from ${this.spectrumSize} to ${fullMeasurement.spectrum.length} bins`);
+        this.spectrumSize = fullMeasurement.spectrum.length;
+      }
+      
+      // Add all spectrum values to log entry
+      fullMeasurement.spectrum.forEach((value, index) => {
+        logEntry[`spectrum_${index}`] = value !== null && !isNaN(value) ? value.toFixed(2) : 'N/A';
+      });
+      
+      // Fill remaining spectrum columns with N/A
+      for (let i = fullMeasurement.spectrum.length; i < this.spectrumSize; i++) {
+        logEntry[`spectrum_${i}`] = 'N/A';
+      }
+    } else {
+      // Fill all spectrum columns with N/A if no spectrum data
+      for (let i = 0; i < this.spectrumSize; i++) {
+        logEntry[`spectrum_${i}`] = 'N/A';
+      }
+    }
+
     try {
       await this.csvWriter.writeRecords([logEntry]);
-      console.log(`📝 Logged: ${datum} ${uhrzeit} | ${pegelValue?.toFixed(2) || 'N/A'} dB | GPS: ${this.currentLocation.latitude || 'N/A'}, ${this.currentLocation.longitude || 'N/A'}`);
+      const spectrumInfo = fullMeasurement && fullMeasurement.spectrum ? 
+        `| Spectrum: ${fullMeasurement.spectrum.length} bins` : '| No spectrum data';
+      console.log(`📝 Logged: ${datum} ${uhrzeit} | ${pegelValue?.toFixed(2) || 'N/A'} dB ${spectrumInfo} | GPS: ${this.currentLocation.latitude || 'N/A'}, ${this.currentLocation.longitude || 'N/A'}`);
     } catch (error) {
       console.error('❌ Error writing to log file:', error);
     }
