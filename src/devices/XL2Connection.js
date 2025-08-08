@@ -147,8 +147,18 @@ export class XL2Connection {
           productId.includes(p.toLowerCase())
         );
         
-        // Include port if it matches any XL2 criteria or is a standard COM port
-        return hasXL2Manufacturer || hasXL2VendorId || hasXL2ProductId || true; // Include all COM ports for now
+        // Include ALL COM ports for comprehensive XL2 testing with *IDN? command
+        // This is crucial for XL2 devices using standard/generic drivers
+        logger.debug(`Including COM port for XL2 testing: ${port.path}`, {
+          manufacturer: port.manufacturer || 'Unknown',
+          vendorId: port.vendorId || 'Unknown',
+          productId: port.productId || 'Unknown',
+          hasXL2Manufacturer,
+          hasXL2VendorId,
+          hasXL2ProductId
+        });
+        
+        return true; // Test all COM ports with *IDN? command
       });
     } else {
       // Unix-specific filtering (existing logic)

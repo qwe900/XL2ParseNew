@@ -168,36 +168,25 @@ export class DeviceManager {
    */
   _filterPortsForDevices(ports, isWindows) {
     if (isWindows) {
-      // Windows: Filter COM ports and known device identifiers
+      // Windows: Include ALL COM ports for comprehensive testing
+      // This is important because XL2 devices with standard drivers may not have recognizable hardware identifiers
       return ports.filter(port => {
         const path = port.path.toLowerCase();
-        const manufacturer = (port.manufacturer || '').toLowerCase();
-        const productId = (port.productId || '').toLowerCase();
-        const vendorId = port.vendorId || '';
         
         // Must be a COM port
         if (!path.match(/^com\d+$/)) {
           return false;
         }
         
-        // Check for known device identifiers (XL2 or GPS)
-        const hasKnownManufacturer = [
-          ...WINDOWS_CONFIG.deviceIdentifiers.xl2.manufacturers,
-          ...WINDOWS_CONFIG.deviceIdentifiers.gps.manufacturers
-        ].some(m => manufacturer.includes(m.toLowerCase()));
+        // Include ALL COM ports - we'll use *IDN? command to identify XL2 devices
+        // This ensures we don't miss XL2 devices using standard/generic drivers
+        logger.debug(`Including COM port for testing: ${port.path}`, {
+          manufacturer: port.manufacturer || 'Unknown',
+          vendorId: port.vendorId || 'Unknown',
+          productId: port.productId || 'Unknown'
+        });
         
-        const hasKnownVendorId = [
-          ...WINDOWS_CONFIG.deviceIdentifiers.xl2.vendorIds,
-          ...WINDOWS_CONFIG.deviceIdentifiers.gps.vendorIds
-        ].includes(vendorId);
-        
-        const hasKnownProductId = [
-          ...WINDOWS_CONFIG.deviceIdentifiers.xl2.productIds,
-          ...WINDOWS_CONFIG.deviceIdentifiers.gps.productIds
-        ].some(p => productId.includes(p.toLowerCase()));
-        
-        // Include port if it matches any known criteria or is a standard COM port
-        return hasKnownManufacturer || hasKnownVendorId || hasKnownProductId || true; // Include all COM ports for comprehensive scan
+        return true; // Test all COM ports with *IDN? command
       });
     } else {
       // Unix: Filter USB and ACM ports
@@ -254,8 +243,9 @@ export class DeviceManager {
     // OPTIMIZATION: Check hardware identifiers first for fast pre-filtering
     const hardwareGuess = this._guessDeviceTypeFromHardware(portInfo);
     
-    // If hardware confidence is very high (>= 70%), skip communication tests
-    if (hardwareGuess.confidence >= 70) {
+    // If hardware confidence is extremely high (>= 90%), skip communication tests
+    // Lowered threshold to ensure more devices get tested with *IDN? command
+    if (hardwareGuess.confidence >= 90) {
       deviceResult.deviceType = hardwareGuess.deviceType;
       deviceResult.confidence = hardwareGuess.confidence;
       deviceResult.response = `Hardware-based identification: ${hardwareGuess.reason}`;
@@ -336,6 +326,8 @@ export class DeviceManager {
    * @returns {Promise<string>} Device response
    */
   async _testPortForXL2(portInfo, isWindows = false) {
+    logger.debug(`🔍 Testing ${portInfo.path} for XL2 device using *IDN? command...`);
+    
     const serialConfig = {
       path: portInfo.path,
       baudRate: SERIAL_CONFIG.XL2_BAUD_RATE,
@@ -364,6 +356,8 @@ export class DeviceManager {
         'XL2 port open'
       );
 
+      logger.debug(`📡 Sending *IDN? command to ${portInfo.path}...`);
+
       // Send XL2 identification command
       const deviceInfo = await ErrorHandler.withTimeout(
         new Promise((resolve, reject) => {
@@ -372,6 +366,7 @@ export class DeviceManager {
           testParser.on('data', (data) => {
             if (!responseReceived) {
               responseReceived = true;
+              logger.debug(`📨 Response from ${portInfo.path}: "${data.trim()}"`);
               resolve(data.trim());
             }
           });
@@ -385,6 +380,9 @@ export class DeviceManager {
       );
 
       return deviceInfo;
+    } catch (error) {
+      logger.debug(`❌ No XL2 response from ${portInfo.path}: ${error.message}`);
+      throw error;
     } finally {
       testPort.close();
     }
@@ -525,9 +523,21 @@ export class DeviceManager {
   _isXL2Response(response) {
     if (!response) return false;
     
-    return DEVICE_IDENTIFIERS.XL2.RESPONSE_KEYWORDS.some(keyword => 
-      response.toUpperCase().includes(keyword.toUpperCase())
+    const responseUpper = response.toUpperCase();
+    logger.debug(`🔍 Checking if response is XL2: "${response}"`);
+    
+    // Check for known XL2 response keywords
+    const isXL2 = DEVICE_IDENTIFIERS.XL2.RESPONSE_KEYWORDS.some(keyword => 
+      responseUpper.includes(keyword.toUpperCase())
     );
+    
+    if (isXL2) {
+      logger.info(`✅ XL2 device identified by response: "${response}"`);
+    } else {
+      logger.debug(`❌ Response does not match XL2 keywords: "${response}"`);
+    }
+    
+    return isXL2;
   }
 
   /**
@@ -639,6 +649,16 @@ export class DeviceManager {
     
     if (vendorId === '0403' && productId.includes('0004')) {
       return { deviceType: 'xl2', confidence: 60, reason: 'FTDI with XL2 product ID' };
+    }
+    
+    // XL2 with Microsoft driver (common when using standard drivers)
+    if (manufacturer.includes('microsoft') && productId.includes('0004')) {
+      return { deviceType: 'xl2', confidence: 55, reason: 'Microsoft driver with XL2 product ID (0004)' };
+    }
+    
+    // Generic XL2 product ID detection (for any vendor)
+    if (productId.includes('0004')) {
+      return { deviceType: 'xl2', confidence: 50, reason: 'XL2 product ID (0004) detected' };
     }
     
     // GPS hardware patterns
