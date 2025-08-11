@@ -45,10 +45,10 @@ export const DEVICE_IDENTIFIERS = {
   XL2: {
     MANUFACTURERS: ['nti', 'xl2', 'nti audio'],
     PRODUCT_IDS: ['0004'],
-    RESPONSE_KEYWORDS: ['NTiAudio', 'XL2'],
+    RESPONSE_KEYWORDS: ['NTiAudio', 'XL2', 'NTI Audio', 'NTI-Audio', 'XL-2', 'NTi', 'Audio Analyzer'],
     // Windows-specific identifiers
     WINDOWS_MANUFACTURERS: ['nti', 'xl2', 'nti audio', 'usb serial', 'ftdi', 'prolific', 'silicon labs', 'ch340', 'ch341'],
-    WINDOWS_VENDOR_IDS: ['0403', '067b', '10c4', '1a86'], // FTDI, Prolific, Silicon Labs, CH340
+    WINDOWS_VENDOR_IDS: ['0403', '067b', '10c4', '1a86', '1A2B'], // FTDI, Prolific, Silicon Labs, CH340, XL2 with Microsoft driver
     WINDOWS_PRODUCT_IDS: ['0004', '6001', '6015', 'ea60', '7523']
   },
   GPS: {

@@ -131,51 +131,33 @@ export class StartupService {
     const bestXL2 = scanResults.summary.bestXL2;
     
     if (!bestXL2) {
-      logger.warn('⚠️ No XL2 devices detected during scan');
-      startupResults.connections.xl2.error = 'No XL2 devices found';
-      this._emitEvent('xl2-connection-status', { 
-        success: false, 
-        message: 'No XL2 devices found during scan' 
-      });
+      logger.warn('⚠️ No XL2 devices detected during initial scan');
+      logger.info('🔄 Attempting comprehensive *IDN? scan of all COM ports...');
+      
+      // Try comprehensive scan of all COM ports with *IDN? command
+      const fallbackXL2 = await this._performFallbackXL2Scan();
+      
+      if (!fallbackXL2) {
+        logger.warn('⚠️ No XL2 devices found even after comprehensive scan');
+        startupResults.connections.xl2.error = 'No XL2 devices found after comprehensive scan';
+        this._emitEvent('xl2-connection-status', { 
+          success: false, 
+          message: 'No XL2 devices found after comprehensive scan' 
+        });
+        return;
+      }
+      
+      // Use the fallback XL2 device
+      logger.info(`✅ Found XL2 device during fallback scan: ${fallbackXL2.port}`);
+      await this._attemptXL2Connection(fallbackXL2, startupResults);
       return;
     }
 
-    logger.info(`🎯 Attempting to connect to XL2 device at ${bestXL2.port}`, {
-      confidence: bestXL2.confidence,
-      manufacturer: bestXL2.manufacturer,
-      response: bestXL2.response
-    });
-
-    this._emitEvent('xl2-connection-status', { 
-      success: false, 
-      message: `Connecting to XL2 at ${bestXL2.port}...` 
-    });
-
-    try {
-      const connectedPort = await this.xl2Connection.connect(bestXL2.port);
-      
-      startupResults.connections.xl2.success = true;
-      startupResults.connections.xl2.port = connectedPort;
-      
-      logger.info(`✅ XL2 successfully connected to ${connectedPort}`);
-      this._emitEvent('xl2-connection-status', { 
-        success: true, 
-        port: connectedPort,
-        message: `XL2 connected successfully to ${connectedPort}` 
-      });
-
-    } catch (error) {
-      logger.error(`❌ Failed to connect to XL2 at ${bestXL2.port}`, error);
-      startupResults.connections.xl2.error = error.message;
-      startupResults.summary.errors.push(`XL2 connection failed: ${error.message}`);
-      
-      this._emitEvent('xl2-connection-status', { 
-        success: false, 
-        error: error.message,
-        message: `XL2 connection failed: ${error.message}` 
-      });
-
-      // Try alternative XL2 devices if available
+    // Use the best XL2 device found during scan
+    await this._attemptXL2Connection(bestXL2, startupResults);
+    
+    // Try alternative XL2 devices if the primary connection failed
+    if (!startupResults.connections.xl2.success) {
       await this._tryAlternativeXL2Devices(scanResults, startupResults);
     }
   }
@@ -419,6 +401,89 @@ export class StartupService {
 
     this._emitEvent('device-reconnect-complete', reconnectResults);
     return reconnectResults;
+  }
+
+  /**
+   * Perform fallback XL2 scan using *IDN? command on all COM ports
+   * @private
+   * @returns {Promise<Object|null>} XL2 device info or null
+   */
+  async _performFallbackXL2Scan() {
+    try {
+      logger.info('🔍 Performing comprehensive *IDN? scan for XL2 devices...');
+      this._emitEvent('xl2-fallback-scan-started');
+      
+      // Use XL2Connection's comprehensive scan method
+      const xl2Devices = await this.xl2Connection.scanAllPortsForXL2();
+      
+      // Find the first XL2 device
+      const xl2Device = xl2Devices.find(d => d.isXL2);
+      
+      if (xl2Device) {
+        logger.info(`✅ Fallback scan found XL2 device at ${xl2Device.port}`);
+        this._emitEvent('xl2-fallback-scan-success', { device: xl2Device });
+        
+        return {
+          port: xl2Device.port,
+          manufacturer: xl2Device.manufacturer,
+          response: xl2Device.deviceInfo,
+          confidence: 95 // High confidence since it responded to *IDN?
+        };
+      }
+      
+      logger.warn('⚠️ Fallback scan found no XL2 devices');
+      this._emitEvent('xl2-fallback-scan-complete', { found: false });
+      return null;
+      
+    } catch (error) {
+      logger.error('❌ Fallback XL2 scan failed', error);
+      this._emitEvent('xl2-fallback-scan-error', { error: error.message });
+      return null;
+    }
+  }
+
+  /**
+   * Attempt to connect to a specific XL2 device
+   * @private
+   * @param {Object} xl2Device - XL2 device info
+   * @param {Object} startupResults - Startup results object to update
+   */
+  async _attemptXL2Connection(xl2Device, startupResults) {
+    logger.info(`🎯 Attempting to connect to XL2 device at ${xl2Device.port}`, {
+      confidence: xl2Device.confidence,
+      manufacturer: xl2Device.manufacturer,
+      response: xl2Device.response
+    });
+
+    this._emitEvent('xl2-connection-status', { 
+      success: false, 
+      message: `Connecting to XL2 at ${xl2Device.port}...` 
+    });
+
+    try {
+      const connectedPort = await this.xl2Connection.connect(xl2Device.port);
+      
+      startupResults.connections.xl2.success = true;
+      startupResults.connections.xl2.port = connectedPort;
+      
+      logger.info(`✅ XL2 successfully connected to ${connectedPort}`);
+      this._emitEvent('xl2-connection-status', { 
+        success: true, 
+        port: connectedPort,
+        message: `XL2 connected successfully to ${connectedPort}` 
+      });
+
+    } catch (error) {
+      logger.error(`❌ Failed to connect to XL2 at ${xl2Device.port}`, error);
+      startupResults.connections.xl2.error = error.message;
+      startupResults.summary.errors.push(`XL2 connection failed: ${error.message}`);
+      
+      this._emitEvent('xl2-connection-status', { 
+        success: false, 
+        error: error.message,
+        message: `XL2 connection failed: ${error.message}` 
+      });
+    }
   }
 }
 
