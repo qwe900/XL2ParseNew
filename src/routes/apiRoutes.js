@@ -9,6 +9,7 @@ import { HTTP_STATUS } from '../constants.js';
 import { logger } from '../utils/logger.js';
 import { ErrorHandler, asyncHandler } from '../utils/errors.js';
 import { validateRequest } from '../utils/validation.js';
+import { createCSVService } from '../services/csvService.js';
 
 /**
  * Create API routes
@@ -301,6 +302,210 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
         stats: csvData.stats
       }
     });
+  }));
+
+  // CSV file administration endpoints
+  router.get('/csv/files', asyncHandler(async (req, res) => {
+    const fs = await import('fs');
+    const path = await import('path');
+    
+    const logsDir = path.join(process.cwd(), 'logs');
+    
+    try {
+      // Ensure logs directory exists
+      if (!fs.existsSync(logsDir)) {
+        fs.mkdirSync(logsDir, { recursive: true });
+      }
+      
+      const files = fs.readdirSync(logsDir)
+        .filter(file => file.endsWith('.csv'))
+        .map(file => {
+          const filePath = path.join(logsDir, file);
+          const stats = fs.statSync(filePath);
+          return {
+            name: file,
+            size: stats.size,
+            modified: stats.mtime.toISOString(),
+            path: filePath
+          };
+        })
+        .sort((a, b) => new Date(b.modified) - new Date(a.modified)); // Sort by newest first
+      
+      res.json({
+        success: true,
+        data: files
+      });
+    } catch (error) {
+      logger.error('Error listing CSV files', error);
+      res.json({
+        success: false,
+        message: 'Failed to list CSV files',
+        error: { message: error.message }
+      });
+    }
+  }));
+
+  router.get('/csv/load/:filename', asyncHandler(async (req, res) => {
+    const { filename } = req.params;
+    const path = await import('path');
+    
+    // Validate filename
+    if (!filename || !filename.endsWith('.csv')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid filename'
+      });
+    }
+    
+    try {
+      const filePath = path.join(process.cwd(), 'logs', filename);
+      const csvService = generatePathFromCSV.csvService || createCSVService(filePath);
+      const csvData = csvService.generatePathFromCSV();
+      
+      res.json({
+        success: true,
+        data: {
+          filename: filename,
+          path: csvData.path,
+          heatmap: csvData.heatmap,
+          stats: csvData.stats
+        }
+      });
+    } catch (error) {
+      logger.error('Error loading CSV file', { filename, error });
+      res.json({
+        success: false,
+        message: `Failed to load CSV file: ${filename}`,
+        error: { message: error.message }
+      });
+    }
+  }));
+
+  router.get('/csv/info/:filename', asyncHandler(async (req, res) => {
+    const { filename } = req.params;
+    const path = await import('path');
+    const fs = await import('fs');
+    
+    // Validate filename
+    if (!filename || !filename.endsWith('.csv')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid filename'
+      });
+    }
+    
+    try {
+      const filePath = path.join(process.cwd(), 'logs', filename);
+      
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+          success: false,
+          message: 'File not found'
+        });
+      }
+      
+      const stats = fs.statSync(filePath);
+      const csvService = generatePathFromCSV.csvService || createCSVService(filePath);
+      const fileStats = csvService.getFileStats();
+      const summaryStats = csvService.getSummaryStats();
+      
+      res.json({
+        success: true,
+        data: {
+          filename: filename,
+          size: stats.size,
+          modified: stats.mtime.toISOString(),
+          records: fileStats.records,
+          stats: summaryStats
+        }
+      });
+    } catch (error) {
+      logger.error('Error getting CSV file info', { filename, error });
+      res.json({
+        success: false,
+        message: `Failed to get file info: ${filename}`,
+        error: { message: error.message }
+      });
+    }
+  }));
+
+  router.get('/csv/current-status', asyncHandler(async (req, res) => {
+    try {
+      const csvService = generatePathFromCSV.csvService || createCSVService();
+      const fileStats = csvService.getFileStats();
+      
+      res.json({
+        success: true,
+        data: {
+          filename: 'xl2_measurements.csv',
+          exists: fileStats.exists,
+          size: fileStats.size,
+          modified: fileStats.modified,
+          records: fileStats.records
+        }
+      });
+    } catch (error) {
+      logger.error('Error getting current CSV status', error);
+      res.json({
+        success: false,
+        message: 'Failed to get current CSV status',
+        error: { message: error.message }
+      });
+    }
+  }));
+
+  router.post('/csv/new-log', asyncHandler(async (req, res) => {
+    const fs = await import('fs');
+    const path = await import('path');
+    
+    try {
+      const logsDir = path.join(process.cwd(), 'logs');
+      const currentLogPath = path.join(logsDir, 'xl2_measurements.csv');
+      
+      // Ensure logs directory exists
+      if (!fs.existsSync(logsDir)) {
+        fs.mkdirSync(logsDir, { recursive: true });
+      }
+      
+      let renamedFile = null;
+      
+      // If current log file exists, rename it with timestamp
+      if (fs.existsSync(currentLogPath)) {
+        const timestamp = new Date().toISOString()
+          .replace(/[:.]/g, '-')
+          .replace('T', '_')
+          .substring(0, 19);
+        
+        renamedFile = `xl2_measurements_${timestamp}.csv`;
+        const renamedPath = path.join(logsDir, renamedFile);
+        
+        fs.renameSync(currentLogPath, renamedPath);
+        logger.info(`Renamed current log file to: ${renamedFile}`);
+      }
+      
+      // Create new empty log file with headers
+      const headers = 'Datum,Uhrzeit,Pegel_12.5Hz_dB,GPS_Latitude,GPS_Longitude,GPS_Altitude,GPS_Satellites,GPS_Fix\n';
+      fs.writeFileSync(currentLogPath, headers, 'utf8');
+      
+      logger.info('Created new empty log file: xl2_measurements.csv');
+      
+      res.json({
+        success: true,
+        data: {
+          newLogFile: 'xl2_measurements.csv',
+          renamedFile: renamedFile
+        },
+        message: 'New log file created successfully'
+      });
+      
+    } catch (error) {
+      logger.error('Error creating new log file', error);
+      res.json({
+        success: false,
+        message: 'Failed to create new log file',
+        error: { message: error.message }
+      });
+    }
   }));
 
   // Health check endpoint

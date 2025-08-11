@@ -791,13 +791,24 @@
             </div>
         </div>
 
+        <!-- FFT Spectrum Display -->
+        <div class="card">
+            <h2>📊 FFT Spectrum Analysis</h2>
+            <div class="fft-display">
+                <canvas id="fftCanvas"></canvas>
+                <div class="fft-status" id="fftStatus">Waiting for FFT data...</div>
+            </div>
+            </div>
+
+
+
         <!-- GPS Map -->
         <div class="card map-container">
             <h2>🗺️ GPS Location & Noise Map</h2>
             <div id="gpsMap"></div>
             <div class="map-controls">
                 <button onclick="centerMapOnCurrentPosition()" class="btn btn-primary">📍 Center on Position</button>
-                <button onclick="loadCSVMarkers()" class="btn btn-info">📊 Load CSV Data</button>
+                <button onclick="loadCSVData()" class="btn btn-info">📊 Load CSV Data</button>
                 <button onclick="clearMapMarkers()" class="btn btn-warning">🗑️ Clear Markers</button>
                 <button onclick="toggleHeatmap()" class="btn btn-secondary" id="heatmapBtn">🔥 Show Heatmap</button>
                 <button onclick="togglePathRecording()" class="btn btn-success" id="pathToggle">🛤️ Start Path</button>
@@ -910,6 +921,50 @@
             </div>
         </div>
 
+    <!-- CSV File Administration -->
+    <div class="card">
+        <h2>📁 CSV File Administration</h2>
+        
+        <!-- Current Log File Status -->
+        <div id="currentLogStatus" class="alert alert-info" style="margin-bottom: 15px;">
+            📄 Current log file: <span id="currentLogFile">xl2_measurements.csv</span><br>
+            📊 Records: <span id="currentLogRecords">--</span> | 
+            📏 Size: <span id="currentLogSize">--</span> | 
+            🕒 Modified: <span id="currentLogModified">--</span>
+        </div>
+
+        <!-- File Management Actions -->
+        <div class="button-group" style="margin-bottom: 20px;">
+            <button onclick="csvAdmin.createNewLogFile()" id="newLogBtn" class="btn btn-primary">📄 Create New Log File</button>
+            <button onclick="csvAdmin.refreshFileList()" id="refreshFilesBtn" class="btn btn-secondary">🔄 Refresh Files</button>
+        </div>
+
+        <!-- Available CSV Files -->
+        <div style="margin-bottom: 15px;">
+            <h3 style="margin-bottom: 10px;">📋 Available CSV Files</h3>
+            <div style="display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: start;">
+                <select id="csvFilesList" size="6" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; font-size: 0.9em;">
+                    <option disabled>Loading files...</option>
+                </select>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <button onclick="csvAdmin.loadSelectedFile()" id="loadFileBtn" class="btn btn-info" style="white-space: nowrap;">📊 Load & Show</button>
+                    <button onclick="csvAdmin.showFileInfo()" id="fileInfoBtn" class="btn btn-secondary" style="white-space: nowrap;">ℹ️ File Info</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- File Information Display -->
+        <div id="fileInfoDisplay" class="alert alert-secondary" style="display: none; margin-top: 15px; font-family: monospace; font-size: 0.9em;">
+            <strong>📄 File Information:</strong><br>
+            <div id="fileInfoContent">Select a file to view information</div>
+        </div>
+
+        <!-- Load Status -->
+        <div id="csvLoadStatus" class="alert alert-info" style="display: none; margin-top: 15px;">
+            <div id="csvLoadStatusText">Ready to load CSV files</div>
+        </div>
+    </div>
+
        <div class="control-panel">
     <!-- Logging Control (Fixed API Endpoints) -->
     <div class="card">
@@ -922,8 +977,8 @@
             <button onclick="stopLogging()" id="stopLogBtn" class="btn btn-warning">⏹️ Stop Logging</button>
         </div>
         <div class="alert alert-info" style="margin-top: 10px; font-size: 0.9em;">
-            📊 Logs: Datum, Uhrzeit, 12.5Hz Pegel, GPS Koordinaten<br>
-            📁 Files saved to: <code>logs/Log_YYYY-MM-DD-HH-mm-ss.csv</code>
+            📊 Logs: Datum, Uhrzeit, FFT Spektrum, GPS Koordinaten<br>
+            📁 Files saved to: <code>logs/*.csv</code>
         </div>
     </div>
 
@@ -966,6 +1021,7 @@
     <script src="js/connection.js?v=20250805-1600"></script>
     <script src="js/fft.js?v=20250805-1600"></script>
     <script src="js/gps.js?v=20250805-1600"></script>
+    <script src="js/csv-admin.js?v=20250805-1600"></script>
     <script src="js/device-detection.js?v=20250805-1600"></script>
     <script src="js/app.js?v=20250805-1600"></script>
     
