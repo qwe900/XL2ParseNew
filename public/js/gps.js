@@ -27,7 +27,21 @@ class GPSManager {
         this.maxDb = null;
         
         this.setupEventListeners();
-        this.initializeMap();
+        
+        // Initialize map when DOM is ready
+        console.log('🗺️ GPS Manager constructor - DOM readyState:', document.readyState);
+        if (document.readyState === 'loading') {
+            console.log('🗺️ DOM still loading, adding DOMContentLoaded listener');
+            document.addEventListener('DOMContentLoaded', () => {
+                console.log('🗺️ DOMContentLoaded fired, initializing map');
+                this.initializeMap();
+                this.updateMapInfo();
+            });
+        } else {
+            console.log('🗺️ DOM already ready, initializing map immediately');
+            this.initializeMap();
+            this.updateMapInfo();
+        }
     }
 
     /**
@@ -100,14 +114,17 @@ class GPSManager {
      * Initialize GPS map
      */
     initializeMap() {
+        console.log('🗺️ Starting map initialization...');
         try {
             const mapElement = document.getElementById('gpsMap');
+            console.log('🗺️ Map element found:', !!mapElement);
             if (!mapElement) {
                 console.error('GPS map element not found');
                 return false;
             }
 
             // Check if Leaflet is available
+            console.log('🗺️ Leaflet available:', typeof L !== 'undefined');
             if (typeof L === 'undefined') {
                 console.error('Leaflet library not loaded');
                 ui.showToast('Map library not available', 'error');
@@ -129,41 +146,125 @@ class GPSManager {
                 keyboard: !isMobile
             };
             
-            this.map = L.map('gpsMap', mapOptions).setView([defaultLocation.lat, defaultLocation.lon], CONFIG.GPS.DEFAULT_ZOOM);
-
-            // Add OpenStreetMap tiles with mobile optimization
-            const tileOptions = {
-                attribution: isMobile ? '' : '© OpenStreetMap contributors',
-                maxZoom: 19,
-                detectRetina: true, // Use high-DPI tiles on retina displays
-                updateWhenIdle: isMobile, // Update tiles only when map is idle on mobile
-                updateWhenZooming: !isMobile, // Disable continuous updates while zooming on mobile
-                keepBuffer: isMobile ? 1 : 2 // Reduce tile buffer on mobile
-            };
+            console.log('🗺️ Creating Leaflet map...');
             
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', tileOptions).addTo(this.map);
-
-            // Initialize track line with mobile-optimized styling
-            try {
-                this.trackLine = L.polyline([], {
-                    color: CONFIG.GPS.TRACK_COLOR || 'red',
-                    weight: isMobile ? 2 : 3,
-                    opacity: 0.8,
-                    smoothFactor: isMobile ? 2 : 1 // More smoothing on mobile for performance
-                }).addTo(this.map);
-                console.log('GPS track line initialized successfully');
-            } catch (error) {
-                console.error('Error initializing GPS track line:', error);
-                this.trackLine = null;
+            // Check if map container is already initialized
+            let mapReused = false;
+            if (mapElement._leaflet_id) {
+                console.log('🗺️ Map container already initialized, checking for existing map...');
+                // In Leaflet, the map instance is stored in the element itself
+                try {
+                    // Check if there's already a map instance in the global scope or element
+                    if (mapElement._leaflet_map) {
+                        this.map = mapElement._leaflet_map;
+                        console.log('🗺️ Found existing map in element');
+                        mapReused = true;
+                    } else {
+                        // Try to find the map in Leaflet's internal registry
+                        console.log('🗺️ Map container exists but no map reference found, will recreate');
+                        // Clear the leaflet ID to allow recreation
+                        delete mapElement._leaflet_id;
+                        mapElement.innerHTML = '';
+                    }
+                    
+                    if (mapReused && this.map) {
+                        // Initialize trackLine if it doesn't exist for reused map
+                        if (!this.trackLine) {
+                            try {
+                                this.trackLine = L.polyline([], {
+                                    color: CONFIG.GPS.TRACK_COLOR || 'red',
+                                    weight: isMobile ? 2 : 3,
+                                    opacity: 0.8,
+                                    smoothFactor: isMobile ? 2 : 1
+                                }).addTo(this.map);
+                                console.log('🗺️ Initialized trackLine for reused map');
+                            } catch (error) {
+                                console.error('Error initializing trackLine for reused map:', error);
+                                this.trackLine = null;
+                            }
+                        }
+                        
+                        // Initialize heatmap if needed
+                        if (!this.heatmapLayer) {
+                            this.initializeHeatmap();
+                        }
+                        
+                        return true;
+                    }
+                } catch (error) {
+                    console.warn('Could not reuse existing map, will create new one:', error);
+                    // Clear the container for fresh start
+                    delete mapElement._leaflet_id;
+                    mapElement.innerHTML = '';
+                }
             }
+            
+            // Create new map only if we don't have an existing one
+            if (!mapReused) {
+                try {
+                    this.map = L.map('gpsMap', mapOptions).setView([defaultLocation.lat, defaultLocation.lon], CONFIG.GPS.DEFAULT_ZOOM);
+                    // Store map reference in element for future reuse
+                    mapElement._leaflet_map = this.map;
+                    console.log('🗺️ Map created successfully:', !!this.map);
+                } catch (error) {
+                    if (error.message.includes('Map container is already initialized')) {
+                        console.log('🗺️ Map already exists, trying to get existing instance...');
+                        try {
+                            // Try to get existing map from element
+                            if (mapElement._leaflet_map) {
+                                this.map = mapElement._leaflet_map;
+                                console.log('🗺️ Retrieved existing map instance from element');
+                                mapReused = true;
+                            } else {
+                                console.error('Map container initialized but no map instance found');
+                                return false;
+                            }
+                        } catch (getError) {
+                            console.error('Could not get existing map:', getError);
+                            return false;
+                        }
+                    } else {
+                        throw error;
+                    }
+                }
 
-            // Add mobile-specific controls
-            if (isMobile) {
-                this.addMobileMapControls();
+                // Only add tiles and setup for new maps
+                if (!mapReused) {
+                    // Add OpenStreetMap tiles with mobile optimization
+                    const tileOptions = {
+                        attribution: isMobile ? '' : '© OpenStreetMap contributors',
+                        maxZoom: 19,
+                        detectRetina: true, // Use high-DPI tiles on retina displays
+                        updateWhenIdle: isMobile, // Update tiles only when map is idle on mobile
+                        updateWhenZooming: !isMobile, // Disable continuous updates while zooming on mobile
+                        keepBuffer: isMobile ? 1 : 2 // Reduce tile buffer on mobile
+                    };
+                    
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', tileOptions).addTo(this.map);
+
+                    // Initialize track line with mobile-optimized styling
+                    try {
+                        this.trackLine = L.polyline([], {
+                            color: CONFIG.GPS.TRACK_COLOR || 'red',
+                            weight: isMobile ? 2 : 3,
+                            opacity: 0.8,
+                            smoothFactor: isMobile ? 2 : 1 // More smoothing on mobile for performance
+                        }).addTo(this.map);
+                        console.log('GPS track line initialized successfully');
+                    } catch (error) {
+                        console.error('Error initializing GPS track line:', error);
+                        this.trackLine = null;
+                    }
+
+                    // Add mobile-specific controls
+                    if (isMobile) {
+                        this.addMobileMapControls();
+                    }
+
+                    // Initialize heatmap
+                    this.initializeHeatmap();
+                }
             }
-
-            // Initialize heatmap
-            this.initializeHeatmap();
 
             // Setup mobile-specific map interactions
             if (isMobile) {
@@ -517,6 +618,9 @@ class GPSManager {
         // Update map
         this.updateMapPosition(location);
         
+        // Update map info display
+        this.updateMapInfo();
+        
         // Auto-start tracking if XL2 FFT is measuring and GPS has fix
         this.checkAutoTracking(location);
         
@@ -757,6 +861,9 @@ class GPSManager {
 
         // Update track points count
         this.updateTrackPointsDisplay(this.track.length);
+        
+        // Update map info display
+        this.updateMapInfo();
     }
 
     /**
@@ -805,7 +912,9 @@ class GPSManager {
      */
     clearTrack() {
         this.track = [];
-        this.trackLine.setLatLngs([]);
+        if (this.trackLine) {
+            this.trackLine.setLatLngs([]);
+        }
         this.totalDistance = 0;
         this.maxSpeed = 0;
 
@@ -813,8 +922,11 @@ class GPSManager {
         this.updateDistanceDisplay(0);
         this.updateTrackPointsDisplay(0);
         this.updateMaxSpeedDisplay(0);
+        
+        // Update map info display
+        this.updateMapInfo();
 
-        ui.showToast('GPS track cleared', 'info');
+        console.log('✅ GPS track cleared');
     }
 
     /**
@@ -1137,18 +1249,97 @@ class GPSManager {
             }
             
             const csvData = result.data;
-            ui.showToast(`Loaded ${csvData.length} measurements from CSV`, 'success');
+            
+            // Check if we have path data
+            if (!csvData.path || csvData.path.length === 0) {
+                ui.showToast('No GPS path data found in CSV', 'warning');
+                return;
+            }
+            
+            ui.showToast(`Loaded ${csvData.path.length} GPS points from CSV`, 'success');
             
             // Clear existing data
             this.clearHeatmap();
             this.clearTrack();
             
-            // Process CSV data
-            this.processCSVData(csvData);
+            // Load path data
+            this.loadPathFromCSV(csvData);
             
         } catch (error) {
             console.error('Error loading CSV data:', error);
             ui.showToast(`Error loading CSV: ${error.message}`, 'error');
+        }
+    }
+
+    /**
+     * Load path data from CSV API response
+     */
+    loadPathFromCSV(csvData) {
+        try {
+            const { path, heatmap, stats } = csvData;
+            
+            // Load path coordinates
+            if (path && path.length > 0) {
+                const trackPoints = path.map(point => [point.lat, point.lng]);
+                
+                // Update track on map
+                this.track = trackPoints;
+                this.trackLine.setLatLngs(trackPoints);
+                
+                // Fit map to track bounds
+                const bounds = L.latLngBounds(trackPoints);
+                this.map.fitBounds(bounds, { padding: [20, 20] });
+                
+                // Add start/end markers
+                this.addTrackMarkers(trackPoints);
+                
+                // Update track points display
+                this.updateTrackPointsDisplay(trackPoints.length);
+                
+                console.log(`📍 Loaded GPS path with ${trackPoints.length} points`);
+            }
+            
+            // Load heatmap data
+            if (heatmap && heatmap.length > 0) {
+                this.heatmapData = heatmap;
+                
+                // Calculate dB range for heatmap
+                const intensities = heatmap.map(point => point[2]);
+                this.minDb = stats.minDb || Math.min(...intensities);
+                this.maxDb = stats.maxDb || Math.max(...intensities);
+                
+                // Update heatmap layer
+                if (this.heatmapLayer) {
+                    this.heatmapLayer.setLatLngs(heatmap);
+                }
+                
+                // Show heatmap automatically if not visible
+                if (!this.isHeatmapVisible) {
+                    this.toggleHeatmap();
+                }
+                
+                console.log(`🔥 Loaded heatmap with ${heatmap.length} points (${this.minDb?.toFixed(1)} - ${this.maxDb?.toFixed(1)} dB)`);
+            }
+            
+            // Display statistics
+            if (stats) {
+                let statsMessage = `📊 CSV Statistics:\n`;
+                statsMessage += `• Total points: ${stats.totalPoints}\n`;
+                statsMessage += `• Valid GPS points: ${stats.validGPSPoints}\n`;
+                if (stats.dbRange) {
+                    statsMessage += `• dB range: ${stats.dbRange}\n`;
+                }
+                if (stats.dateRange && stats.dateRange.start) {
+                    statsMessage += `• Date range: ${stats.dateRange.start} - ${stats.dateRange.end} (${stats.dateRange.days} days)`;
+                }
+                
+                console.log(statsMessage);
+                ui.showToast(`Path loaded successfully! ${stats.validGPSPoints} GPS points, ${stats.dbRange || 'No dB data'}`, 'success');
+            }
+            
+        } catch (error) {
+            console.error('Error loading path from CSV:', error);
+            ui.showToast(`Error loading path: ${error.message}`, 'error');
         }
     }
 
@@ -1289,12 +1480,67 @@ class GPSManager {
      * Center map on current position
      */
     centerMapOnCurrentPosition() {
+        const mapElement = document.getElementById('gpsMap');
+        console.log('🎯 Attempting to center map. Marker:', !!this.marker, 'Map:', !!this.map, 'CurrentLocation:', !!this.currentLocation, 'MapElement:', !!mapElement);
+        
+        // If map is not initialized but element exists, try to get existing map or initialize new one
+        if (!this.map && mapElement) {
+            console.log('🗺️ Map not initialized but element exists...');
+            
+            // Check if there's already a Leaflet map in the container
+            if (mapElement._leaflet_id || mapElement._leaflet_map) {
+                try {
+                    if (mapElement._leaflet_map) {
+                        this.map = mapElement._leaflet_map;
+                        console.log('🗺️ Found existing map instance, reusing it');
+                        
+                        // Initialize trackLine if it doesn't exist
+                        if (!this.trackLine && this.map) {
+                            const isMobile = Utils.isMobileDevice();
+                            this.trackLine = L.polyline([], {
+                                color: CONFIG.GPS.TRACK_COLOR || 'red',
+                                weight: isMobile ? 2 : 3,
+                                opacity: 0.8,
+                                smoothFactor: isMobile ? 2 : 1
+                            }).addTo(this.map);
+                            console.log('🗺️ Initialized trackLine for existing map');
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Could not reuse existing map:', error);
+                    this.map = null;
+                }
+            }
+            
+            // If we still don't have a map, initialize a new one
+            if (!this.map) {
+                console.log('🗺️ No existing map found, attempting initialization...');
+                const success = this.initializeMap();
+                if (!success) {
+                    console.error('Failed to initialize map');
+                    ui.showToast('Failed to initialize map', 'error');
+                    return;
+                }
+            }
+        }
+        
         if (this.marker && this.map) {
+            // Use marker position if available
             const position = this.marker.getLatLng();
             this.map.setView([position.lat, position.lng], CONFIG.GPS.DEFAULT_ZOOM);
-            ui.showToast('Map centered on current position', 'info');
+            ui.showToast('Map centered on current GPS position', 'info');
+        } else if (this.currentLocation && this.map && this.currentLocation.latitude && this.currentLocation.longitude) {
+            // Use current location if marker not available
+            this.map.setView([this.currentLocation.latitude, this.currentLocation.longitude], CONFIG.GPS.DEFAULT_ZOOM);
+            ui.showToast('Map centered on last known position', 'info');
+        } else if (this.map && this.track.length > 0) {
+            // Use last track point if available
+            const lastPoint = this.track[this.track.length - 1];
+            this.map.setView([lastPoint[0], lastPoint[1]], CONFIG.GPS.DEFAULT_ZOOM);
+            ui.showToast('Map centered on last track point', 'info');
         } else {
-            ui.showToast('No current position available', 'warning');
+            console.warn('No position data available for centering');
+            ui.showToast('No position data available. Connect GPS or load CSV data first.', 'warning');
         }
     }
 
@@ -1405,29 +1651,86 @@ class GPSManager {
      * Clear all markers from map
      */
     clearMapMarkers() {
-        // Clear track
-        this.clearTrack();
+        const mapElement = document.getElementById('gpsMap');
+        console.log('🗑️ Starting clearMapMarkers. Map available:', !!this.map, 'MapElement:', !!mapElement);
         
-        // Clear heatmap
-        this.clearHeatmap();
-        
-        // Remove all layers except base layer
-        this.map.eachLayer((layer) => {
-            if (layer !== this.map._layers[Object.keys(this.map._layers)[0]]) {
-                // Don't remove the base tile layer
-                if (!layer._url) {
-                    this.map.removeLayer(layer);
+        // If map is not initialized but element exists, try to get existing map or initialize new one
+        if (!this.map && mapElement) {
+            console.log('🗺️ Map not initialized but element exists...');
+            
+            // Check if there's already a Leaflet map in the container
+            if (mapElement._leaflet_id || mapElement._leaflet_map) {
+                try {
+                    if (mapElement._leaflet_map) {
+                        this.map = mapElement._leaflet_map;
+                        console.log('🗺️ Found existing map instance, reusing it');
+                        
+                        // Initialize trackLine if it doesn't exist
+                        if (!this.trackLine && this.map) {
+                            const isMobile = Utils.isMobileDevice();
+                            this.trackLine = L.polyline([], {
+                                color: CONFIG.GPS.TRACK_COLOR || 'red',
+                                weight: isMobile ? 2 : 3,
+                                opacity: 0.8,
+                                smoothFactor: isMobile ? 2 : 1
+                            }).addTo(this.map);
+                            console.log('🗺️ Initialized trackLine for existing map');
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Could not reuse existing map:', error);
+                    this.map = null;
                 }
             }
-        });
+            
+            // If we still don't have a map, initialize a new one
+            if (!this.map) {
+                console.log('🗺️ No existing map found, attempting initialization...');
+                const success = this.initializeMap();
+                if (!success) {
+                    console.error('Failed to initialize map');
+                    ui.showToast('Failed to initialize map', 'error');
+                    return;
+                }
+            }
+        }
         
-        // Reset distance and position
-        this.totalDistance = 0;
-        this.lastPosition = null;
-        
-        console.log('🗑️ Cleared all map markers and path');
-        ui.showToast('Map cleared', 'info');
-        this.updateMapInfo();
+        try {
+            // Clear track
+            this.clearTrack();
+            console.log('✅ Track cleared');
+            
+            // Clear heatmap
+            this.clearHeatmap();
+            console.log('✅ Heatmap cleared');
+            
+            if (this.map) {
+                // Remove all layers except base layer
+                let removedLayers = 0;
+                this.map.eachLayer((layer) => {
+                    if (layer !== this.map._layers[Object.keys(this.map._layers)[0]]) {
+                        // Don't remove the base tile layer
+                        if (!layer._url) {
+                            this.map.removeLayer(layer);
+                            removedLayers++;
+                        }
+                    }
+                });
+                console.log(`✅ Removed ${removedLayers} map layers`);
+            }
+            
+            // Reset distance and position
+            this.totalDistance = 0;
+            this.lastPosition = null;
+            
+            console.log('🗑️ Cleared all map markers and path');
+            ui.showToast('Map cleared successfully', 'success');
+            this.updateMapInfo();
+            
+        } catch (error) {
+            console.error('Error in clearMapMarkers:', error);
+            ui.showToast('Error clearing map: ' + error.message, 'error');
+        }
     }
 
     /**
@@ -1537,20 +1840,62 @@ class GPSManager {
 
 // Global functions for button handlers
 function centerMapOnCurrentPosition() {
+    console.log('🎯 centerMapOnCurrentPosition called, gpsManager available:', !!window.gpsManager);
     if (window.gpsManager) {
-        window.gpsManager.centerMapOnCurrentPosition();
+        try {
+            window.gpsManager.centerMapOnCurrentPosition();
+        } catch (error) {
+            console.error('Error in centerMapOnCurrentPosition:', error);
+            ui.showToast('Error centering map: ' + error.message, 'error');
+        }
+    } else {
+        console.warn('GPS Manager not available');
+        ui.showToast('GPS Manager not initialized', 'warning');
+    }
+}
+
+function loadCSVData() {
+    console.log('📊 loadCSVData called, gpsManager available:', !!window.gpsManager);
+    if (window.gpsManager) {
+        try {
+            window.gpsManager.loadCSVData();
+        } catch (error) {
+            console.error('Error in loadCSVData:', error);
+            ui.showToast('Error loading CSV data: ' + error.message, 'error');
+        }
+    } else {
+        console.warn('GPS Manager not available');
+        ui.showToast('GPS Manager not initialized', 'warning');
     }
 }
 
 function loadCSVMarkers() {
+    console.log('📍 loadCSVMarkers called, gpsManager available:', !!window.gpsManager);
     if (window.gpsManager) {
-        window.gpsManager.loadCSVMarkers();
+        try {
+            window.gpsManager.loadCSVMarkers();
+        } catch (error) {
+            console.error('Error in loadCSVMarkers:', error);
+            ui.showToast('Error loading CSV markers: ' + error.message, 'error');
+        }
+    } else {
+        console.warn('GPS Manager not available');
+        ui.showToast('GPS Manager not initialized', 'warning');
     }
 }
 
 function clearMapMarkers() {
+    console.log('🗑️ clearMapMarkers called, gpsManager available:', !!window.gpsManager);
     if (window.gpsManager) {
-        window.gpsManager.clearMapMarkers();
+        try {
+            window.gpsManager.clearMapMarkers();
+        } catch (error) {
+            console.error('Error in clearMapMarkers:', error);
+            ui.showToast('Error clearing markers: ' + error.message, 'error');
+        }
+    } else {
+        console.warn('GPS Manager not available');
+        ui.showToast('GPS Manager not initialized', 'warning');
     }
 }
 

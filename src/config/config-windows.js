@@ -161,7 +161,7 @@ export const WINDOWS_CONFIG = {
         /^\\\\\.\\COM\d+$/i
       ],
       // USB vendor/product IDs
-      vendorIds: ['0403', '067b', '10c4', '1a86'], // FTDI, Prolific, Silicon Labs, CH340
+      vendorIds: ['0403', '067b', '10c4', '1a86', '1A2B'], // FTDI, Prolific, Silicon Labs, CH340, XL2 with Microsoft driver
       productIds: ['0004', '6001', '6015', 'ea60', '7523']
     },
     
