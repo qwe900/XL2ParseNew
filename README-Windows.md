@@ -1,15 +1,16 @@
-# XL2 Web Server - Windows Installation Guide
+# 🪟 XL2 Web Server - Windows Setup Guide
 
-This guide covers the installation and setup of the XL2 Web Server on Windows systems.
+Complete installation and configuration guide for running XL2 Web Server on Windows systems.
 
-## 🪟 Windows Support
+> **📖 Main Documentation**: See [README.md](README.md) for general information and features.
 
-The XL2 Web Server now includes full Windows support with:
-- **Native Windows serial port handling** (COM1, COM2, etc.)
-- **Automatic device detection** for XL2 and GPS modules
-- **Windows-specific performance monitoring**
-- **PowerShell installation scripts**
-- **Windows Service support** (optional)
+## ✨ Windows-Specific Features
+
+- **Native COM Port Handling**: Automatic detection of COM1-COM20
+- **PowerShell Installation Scripts**: One-command setup
+- **Windows Service Support**: Run as background service
+- **Performance Monitoring**: Windows-specific system metrics
+- **Firewall Integration**: Automatic network configuration
 
 ## 📋 Prerequisites
 
@@ -367,3 +368,48 @@ net start XL2WebServer
 - [ ] Verify device connections in web interface
 
 **🎉 You're ready to use XL2 Web Server on Windows!**
+
+---
+
+## 🎯 Quick Reference
+
+### Essential Commands
+```powershell
+# Check available COM ports
+Get-WmiObject -Class Win32_SerialPort | Select-Object DeviceID, Description
+
+# Start/stop Windows service
+net start XL2WebServer
+net stop XL2WebServer
+sc query XL2WebServer
+
+# Check if port is in use
+netstat -ano | findstr :3000
+
+# View running Node.js processes
+tasklist | findstr node
+```
+
+### Useful PowerShell Aliases
+Add to your PowerShell profile:
+```powershell
+# Check PowerShell profile location
+$PROFILE
+
+# Add these functions to your profile
+function xl2-start { npm start }
+function xl2-dev { npm run dev }
+function xl2-ports { npm run port-info }
+function xl2-service-start { net start XL2WebServer }
+function xl2-service-stop { net stop XL2WebServer }
+```
+
+### Support Resources
+- **Main Documentation**: [README.md](README.md)
+- **Raspberry Pi Setup**: [raspberry-pi-setup.md](raspberry-pi-setup.md)
+- **Troubleshooting**: Check Event Viewer and log files
+- **Community**: GitHub Issues and Discussions
+
+---
+
+*🏠 Return to [Main Documentation](README.md) for general usage and API information.*

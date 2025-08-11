@@ -1,6 +1,18 @@
-# 🍓 Raspberry Pi Setup Guide for XL2 Web Server
+# 🍓 XL2 Web Server - Raspberry Pi Setup Guide
 
-## Prerequisites
+Complete installation and configuration guide for running XL2 Web Server on Raspberry Pi systems.
+
+> **📖 Main Documentation**: See [README.md](README.md) for general information and features.
+
+## ✨ Raspberry Pi Features
+
+- **Optimized Performance**: Configurations for Pi 3B+, Pi 4, Pi 5, and Pi Zero 2W
+- **USB Device Management**: Automatic permissions and udev rules
+- **System Service**: Auto-start on boot with systemd
+- **Hardware Monitoring**: Pi-specific temperature and throttling detection
+- **Power Management**: Optimized for continuous operation
+
+## 📋 Prerequisites
 
 ### 1. Raspberry Pi OS Setup
 ```bash
@@ -272,3 +284,47 @@ sudo ufw enable
 sudo ufw allow 3000/tcp
 sudo ufw allow ssh
 ```
+
+---
+
+## 🎯 Quick Reference
+
+### Essential Commands
+```bash
+# Check service status
+sudo systemctl status xl2-server
+
+# View logs
+sudo journalctl -u xl2-server -f
+
+# Restart service
+sudo systemctl restart xl2-server
+
+# Check device connections
+ls -la /dev/ttyUSB*
+lsusb
+
+# Monitor system performance
+htop
+vcgencmd measure_temp  # Pi temperature
+```
+
+### Useful Aliases
+Add to `~/.bashrc`:
+```bash
+alias xl2-logs='sudo journalctl -u xl2-server -f'
+alias xl2-restart='sudo systemctl restart xl2-server'
+alias xl2-status='sudo systemctl status xl2-server'
+alias check-temp='vcgencmd measure_temp'
+alias check-usb='ls -la /dev/ttyUSB* && lsusb'
+```
+
+### Support Resources
+- **Main Documentation**: [README.md](README.md)
+- **Windows Setup**: [README-Windows.md](README-Windows.md)
+- **Troubleshooting**: Check logs and system status
+- **Community**: GitHub Issues and Discussions
+
+---
+
+*🏠 Return to [Main Documentation](README.md) for general usage and API information.*
