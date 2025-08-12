@@ -166,7 +166,7 @@ class UIManager {
      */
     setupMobileOptimizations() {
         // Detect mobile device
-        this.isMobile = Utils.isMobileDevice();
+        this.isMobile = Utils.isMobile();
         this.isTablet = Utils.isTabletDevice();
         this.isTouchDevice = Utils.isTouchDevice();
         

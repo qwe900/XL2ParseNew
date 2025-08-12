@@ -90,14 +90,15 @@ class FFTManager {
             }
 
             // Get mobile-optimized canvas size
-            const isMobile = Utils.isMobileDevice();
+            const isMobile = Utils.isMobile();
             let canvasSize;
             
             if (isMobile) {
-                canvasSize = Utils.getMobileCanvasSize(
-                    CONFIG.FFT.CANVAS_SIZE.width, 
-                    CONFIG.FFT.CANVAS_SIZE.height
-                );
+                // Mobile-optimized canvas size (smaller for better performance)
+                canvasSize = {
+                    width: Math.min(CONFIG.FFT.CANVAS_SIZE.width, 600),
+                    height: Math.min(CONFIG.FFT.CANVAS_SIZE.height, 250)
+                };
             } else {
                 canvasSize = {
                     width: CONFIG.FFT.CANVAS_SIZE.width,
@@ -109,18 +110,14 @@ class FFTManager {
             this.canvas.width = canvasSize.width;
             this.canvas.height = canvasSize.height;
 
-            // Apply high DPI scaling and mobile optimization
-            if (isMobile) {
-                Utils.optimizeCanvasForMobile(this.canvas, this.ctx);
-            } else {
-                const pixelRatio = Utils.getPixelRatio();
-                if (pixelRatio > 1) {
-                    this.canvas.width *= pixelRatio;
-                    this.canvas.height *= pixelRatio;
-                    this.canvas.style.width = canvasSize.width + 'px';
-                    this.canvas.style.height = canvasSize.height + 'px';
-                    this.ctx.scale(pixelRatio, pixelRatio);
-                }
+            // Apply high DPI scaling
+            const pixelRatio = Utils.getPixelRatio();
+            if (pixelRatio > 1) {
+                this.canvas.width *= pixelRatio;
+                this.canvas.height *= pixelRatio;
+                this.canvas.style.width = canvasSize.width + 'px';
+                this.canvas.style.height = canvasSize.height + 'px';
+                this.ctx.scale(pixelRatio, pixelRatio);
             }
 
             console.log('FFT Canvas initialized successfully:', {
@@ -154,7 +151,7 @@ class FFTManager {
 
         const width = this.canvas.width / Utils.getPixelRatio();
         const height = this.canvas.height / Utils.getPixelRatio();
-        const isMobile = Utils.isMobileDevice();
+        const isMobile = Utils.isMobile();
 
         // Clear canvas
         this.ctx.fillStyle = '#000';
@@ -162,13 +159,11 @@ class FFTManager {
 
         // Draw "Waiting for data" message
         this.ctx.fillStyle = '#fff';
-        const fontSize = isMobile ? Utils.getMobileFontSize(14) : 16;
+        const fontSize = isMobile ? 12 : 16;
         this.ctx.font = `${fontSize}px Arial`;
         this.ctx.textAlign = 'center';
         
-        const message = isMobile ? 
-            Utils.formatTextForMobile('Waiting for FFT data...', 30) : 
-            'Waiting for FFT data...';
+        const message = isMobile ? 'Waiting for FFT data...' : 'Waiting for FFT data...';
             
         this.ctx.fillText(message, width / 2, height / 2);
         this.ctx.textAlign = 'left'; // Reset alignment
@@ -572,7 +567,7 @@ class FFTManager {
         }
 
         try {
-            const isMobile = Utils.isMobileDevice();
+            const isMobile = Utils.isMobile();
             const pixelRatio = Utils.getPixelRatio();
             const width = this.canvas.width / pixelRatio;
             const height = this.canvas.height / pixelRatio;

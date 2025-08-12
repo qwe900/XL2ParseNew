@@ -122,7 +122,7 @@ class ConsoleManager {
      * Add message to DOM
      */
     addMessageToDOM(message) {
-        const isMobile = Utils.isMobileDevice();
+        const isMobile = Utils.isMobile();
         
         const messageDiv = Utils.createElement('div', {
             className: `console-message ${message.type} ${isMobile ? 'mobile-message' : ''}`,
@@ -147,7 +147,7 @@ class ConsoleManager {
 
         // Create text span (truncated for mobile)
         const displayText = isMobile ? 
-            Utils.formatTextForMobile(message.text, 60) : 
+            message.text : 
             message.text;
             
         const textSpan = Utils.createElement('span', {
