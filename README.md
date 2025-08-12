@@ -44,7 +44,21 @@ cd XL2ParseNew
 npm start
 ```
 
-### Raspberry Pi
+### Raspberry Pi (Automated)
+```bash
+# Clone the repository
+git clone <repository-url>
+cd XL2ParseNew
+
+# Run automated installation
+chmod +x install-raspberry-pi.sh
+./install-raspberry-pi.sh
+
+# Optional: Install as system service
+./install-raspberry-pi.sh --install-as-service
+```
+
+### Raspberry Pi (Manual)
 ```bash
 # Install Node.js 18.x
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -

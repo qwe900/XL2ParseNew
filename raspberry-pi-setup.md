@@ -12,7 +12,41 @@ Complete installation and configuration guide for running XL2 Web Server on Rasp
 - **Hardware Monitoring**: Pi-specific temperature and throttling detection
 - **Power Management**: Optimized for continuous operation
 
-## 📋 Prerequisites
+## 🚀 Quick Installation (Recommended)
+
+For a fully automated installation, use the provided installation script:
+
+```bash
+# Make the script executable
+chmod +x install-raspberry-pi.sh
+
+# Run automated installation
+./install-raspberry-pi.sh
+
+# Optional: Install as systemd service
+./install-raspberry-pi.sh --install-as-service
+
+# Optional: Specify custom port
+./install-raspberry-pi.sh --port 8080
+
+# View all options
+./install-raspberry-pi.sh --help
+```
+
+The automated script will:
+- ✅ Update system packages
+- ✅ Install Node.js 18.x
+- ✅ Set up USB permissions and udev rules
+- ✅ Install project dependencies and PM2
+- ✅ Create configuration files
+- ✅ Set up startup scripts
+- ✅ Optionally install as systemd service
+
+**For manual installation or troubleshooting, continue with the detailed steps below.**
+
+---
+
+## 📋 Manual Installation Prerequisites
 
 ### 1. Raspberry Pi OS Setup
 ```bash
