@@ -17,6 +17,7 @@ class FFTManager {
         
         this.setupEventListeners();
         this.initializeCanvas();
+        this.restoreLastSpectrum();
     }
 
     /**
@@ -145,6 +146,11 @@ class FFTManager {
      */
     drawInitialState() {
         if (!this.ctx) return;
+
+        // If we have previous spectrum data, don't show waiting message
+        if (this.lastSpectrum && this.lastSpectrum.length > 0) {
+            return;
+        }
 
         const width = this.canvas.width / Utils.getPixelRatio();
         const height = this.canvas.height / Utils.getPixelRatio();
@@ -430,6 +436,13 @@ class FFTManager {
         this.frequencies = null;
         this.lastSpectrum = null;
         
+        // Clear stored spectrum data since device is disconnected
+        try {
+            localStorage.removeItem('xl2_last_fft_spectrum');
+        } catch (error) {
+            console.warn('Failed to clear stored FFT spectrum:', error);
+        }
+        
         // Update UI
         const startBtn = document.getElementById('startFFTBtn');
         const stopBtn = document.getElementById('stopFFTBtn');
@@ -480,6 +493,9 @@ class FFTManager {
 
         this.lastSpectrum = data.spectrum;
         this.lastUpdate = new Date();
+
+        // Save spectrum data to localStorage for persistence across page reloads
+        this.saveLastSpectrum(data);
 
         // Draw spectrum
         this.drawSpectrum(data.spectrum, data.hz12_5_index, data.hz12_5_value);
@@ -890,6 +906,68 @@ class FFTManager {
         this.lastSpectrum = null;
         this.hz12_5Index = -1;
         this.hz12_5Frequency = null;
+    }
+
+    /**
+     * Save last spectrum data to localStorage
+     */
+    saveLastSpectrum(data) {
+        try {
+            const spectrumData = {
+                spectrum: data.spectrum,
+                frequencies: this.frequencies,
+                hz12_5_index: data.hz12_5_index,
+                hz12_5_value: data.hz12_5_value,
+                hz12_5_frequency: data.hz12_5_frequency,
+                timestamp: Date.now()
+            };
+            
+            localStorage.setItem('xl2_last_fft_spectrum', JSON.stringify(spectrumData));
+        } catch (error) {
+            console.warn('Failed to save FFT spectrum to localStorage:', error);
+        }
+    }
+
+    /**
+     * Restore last spectrum data from localStorage
+     */
+    restoreLastSpectrum() {
+        try {
+            const stored = localStorage.getItem('xl2_last_fft_spectrum');
+            if (!stored) return;
+
+            const spectrumData = JSON.parse(stored);
+            
+            // Check if data is recent (within 24 hours)
+            const age = Date.now() - spectrumData.timestamp;
+            if (age > 24 * 60 * 60 * 1000) { // 24 hours
+                console.log('Stored FFT spectrum too old, ignoring');
+                localStorage.removeItem('xl2_last_fft_spectrum');
+                return;
+            }
+
+            // Restore spectrum data
+            this.lastSpectrum = spectrumData.spectrum;
+            this.frequencies = spectrumData.frequencies;
+            this.hz12_5Index = spectrumData.hz12_5_index;
+            this.hz12_5Frequency = spectrumData.hz12_5_frequency;
+            this.lastUpdate = new Date(spectrumData.timestamp);
+
+            // Draw the restored spectrum
+            if (this.lastSpectrum && this.ctx) {
+                this.drawSpectrum(this.lastSpectrum, spectrumData.hz12_5_index, spectrumData.hz12_5_value);
+                
+                // Update status to show it's restored data
+                const age_minutes = Math.floor(age / (1000 * 60));
+                this.updateStatus(`Restored FFT - ${this.lastSpectrum.length} bins - ${age_minutes}m ago`, 'restored');
+                
+                console.log(`FFT spectrum restored from ${age_minutes} minutes ago`);
+            }
+
+        } catch (error) {
+            console.warn('Failed to restore FFT spectrum from localStorage:', error);
+            localStorage.removeItem('xl2_last_fft_spectrum');
+        }
     }
 
     /**

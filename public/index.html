@@ -936,6 +936,7 @@
         <!-- File Management Actions -->
         <div class="button-group" style="margin-bottom: 20px;">
             <button onclick="csvAdmin.createNewLogFile()" id="newLogBtn" class="btn btn-primary">📄 Create New Log File</button>
+            <button onclick="csvAdmin.downloadCurrentLog()" id="downloadCurrentBtn" class="btn btn-success">💾 Download Current Log</button>
             <button onclick="csvAdmin.refreshFileList()" id="refreshFilesBtn" class="btn btn-secondary">🔄 Refresh Files</button>
         </div>
 
@@ -949,6 +950,7 @@
                 <div style="display: flex; flex-direction: column; gap: 8px;">
                     <button onclick="csvAdmin.loadSelectedFile()" id="loadFileBtn" class="btn btn-info" style="white-space: nowrap;">📊 Load & Show</button>
                     <button onclick="csvAdmin.showFileInfo()" id="fileInfoBtn" class="btn btn-secondary" style="white-space: nowrap;">ℹ️ File Info</button>
+                    <button onclick="csvAdmin.downloadSelectedFile()" id="downloadFileBtn" class="btn btn-success" style="white-space: nowrap;">💾 Download</button>
                 </div>
             </div>
         </div>

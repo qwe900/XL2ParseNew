@@ -761,6 +761,16 @@ body {
     font-weight: 600;
 }
 
+.fft-status.restored {
+    color: var(--warning-color);
+    font-weight: 500;
+}
+
+.fft-status.error {
+    color: var(--danger-color);
+    font-weight: 500;
+}
+
 .fft-hz-marker {
     position: absolute;
     background-color: var(--danger-color);

@@ -508,6 +508,53 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
     }
   }));
 
+  // CSV export/download endpoint
+  router.get('/export-csv/:filename', asyncHandler(async (req, res) => {
+    const { filename } = req.params;
+    const path = await import('path');
+    const fs = await import('fs');
+    
+    // Validate filename
+    if (!filename || !filename.endsWith('.csv')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid filename'
+      });
+    }
+    
+    try {
+      const filePath = path.join(process.cwd(), 'logs', filename);
+      
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+          success: false,
+          message: 'File not found'
+        });
+      }
+      
+      // Read the CSV file
+      const csvContent = fs.readFileSync(filePath, 'utf8');
+      
+      // Set appropriate headers for file download
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', Buffer.byteLength(csvContent, 'utf8'));
+      
+      // Send the file content
+      res.send(csvContent);
+      
+      logger.info(`CSV file downloaded: ${filename}`);
+      
+    } catch (error) {
+      logger.error('Error exporting CSV file', { filename, error });
+      res.status(500).json({
+        success: false,
+        message: `Failed to export CSV file: ${filename}`,
+        error: { message: error.message }
+      });
+    }
+  }));
+
   // Health check endpoint
   router.get('/health', asyncHandler(async (req, res) => {
     const health = {

@@ -89,9 +89,11 @@ class CSVAdministration {
         
         const loadBtn = document.getElementById('loadFileBtn');
         const infoBtn = document.getElementById('fileInfoBtn');
+        const downloadBtn = document.getElementById('downloadFileBtn');
         
         if (loadBtn) loadBtn.disabled = !hasSelection;
         if (infoBtn) infoBtn.disabled = !hasSelection;
+        if (downloadBtn) downloadBtn.disabled = !hasSelection;
     }
 
     /**
@@ -213,6 +215,94 @@ class CSVAdministration {
 
         content.innerHTML = infoText.replace(/\\n/g, '<br>');
         display.style.display = 'block';
+    }
+
+    /**
+     * Download selected CSV file
+     */
+    async downloadSelectedFile() {
+        if (!this.selectedFile) {
+            ui.showToast('Please select a CSV file first', 'warning');
+            return;
+        }
+
+        try {
+            ui.showToast(`Downloading ${this.selectedFile}...`, 'info');
+            
+            const response = await fetch(`/api/export-csv/${encodeURIComponent(this.selectedFile)}`);
+            
+            if (!response.ok) {
+                const errorResult = await response.json();
+                throw new Error(errorResult.message || 'Failed to download CSV file');
+            }
+            
+            // Get the file content as text
+            const csvContent = await response.text();
+            
+            // Use the utility function to download the file
+            if (typeof Utils !== 'undefined' && Utils.downloadFile) {
+                Utils.downloadFile(csvContent, this.selectedFile, 'text/csv');
+            } else {
+                // Fallback download method
+                const blob = new Blob([csvContent], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = this.selectedFile;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+            
+            ui.showToast(`Successfully downloaded ${this.selectedFile}`, 'success');
+            
+        } catch (error) {
+            console.error('Error downloading CSV file:', error);
+            ui.showToast(`Error downloading ${this.selectedFile}: ${error.message}`, 'error');
+        }
+    }
+
+    /**
+     * Download current active log file
+     */
+    async downloadCurrentLog() {
+        try {
+            const currentLogFile = 'xl2_measurements.csv';
+            ui.showToast(`Downloading current log file...`, 'info');
+            
+            const response = await fetch(`/api/export-csv/${encodeURIComponent(currentLogFile)}`);
+            
+            if (!response.ok) {
+                const errorResult = await response.json();
+                throw new Error(errorResult.message || 'Failed to download current log file');
+            }
+            
+            // Get the file content as text
+            const csvContent = await response.text();
+            
+            // Use the utility function to download the file
+            if (typeof Utils !== 'undefined' && Utils.downloadFile) {
+                Utils.downloadFile(csvContent, currentLogFile, 'text/csv');
+            } else {
+                // Fallback download method
+                const blob = new Blob([csvContent], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = currentLogFile;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+            
+            ui.showToast(`Successfully downloaded ${currentLogFile}`, 'success');
+            
+        } catch (error) {
+            console.error('Error downloading current log file:', error);
+            ui.showToast(`Error downloading current log: ${error.message}`, 'error');
+        }
     }
 
     /**
