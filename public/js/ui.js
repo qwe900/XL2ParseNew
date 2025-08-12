@@ -353,7 +353,11 @@ class UIManager {
                 
                 // Update canvas sizes if needed
                 if (typeof fftManager !== 'undefined' && fftManager.canvas) {
-                    fftManager.initializeCanvas();
+                    if (typeof fftManager.reinitializeCanvas === 'function') {
+                        fftManager.reinitializeCanvas();
+                    } else {
+                        fftManager.initializeCanvas();
+                    }
                 }
                 
                 // Update map size

@@ -407,7 +407,7 @@ class XL2Application {
         try {
             console.log('🌐 Window loaded, finalizing initialization...');
             
-            const isMobile = Utils.isMobileDevice();
+            const isMobile = Utils.isMobile();
             
             // Add console controls
             if (this.consoleManager) {

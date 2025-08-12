@@ -131,7 +131,7 @@ class GPSManager {
                 return false;
             }
 
-            const isMobile = Utils.isMobileDevice();
+            const isMobile = Utils.isMobile();
             
             // Initialize map with default location
             const defaultLocation = CONFIG.GPS.DEFAULT_LOCATION;
@@ -1496,7 +1496,7 @@ class GPSManager {
                         
                         // Initialize trackLine if it doesn't exist
                         if (!this.trackLine && this.map) {
-                            const isMobile = Utils.isMobileDevice();
+                            const isMobile = Utils.isMobile();
                             this.trackLine = L.polyline([], {
                                 color: CONFIG.GPS.TRACK_COLOR || 'red',
                                 weight: isMobile ? 2 : 3,
@@ -1667,7 +1667,7 @@ class GPSManager {
                         
                         // Initialize trackLine if it doesn't exist
                         if (!this.trackLine && this.map) {
-                            const isMobile = Utils.isMobileDevice();
+                            const isMobile = Utils.isMobile();
                             this.trackLine = L.polyline([], {
                                 color: CONFIG.GPS.TRACK_COLOR || 'red',
                                 weight: isMobile ? 2 : 3,

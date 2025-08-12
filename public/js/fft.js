@@ -91,12 +91,17 @@ class FFTManager {
 
             // Get mobile-optimized canvas size
             const isMobile = Utils.isMobile();
+            const pixelRatio = Utils.getPixelRatio();
             let canvasSize;
             
             if (isMobile) {
                 // Mobile-optimized canvas size (smaller for better performance)
+                const containerWidth = this.canvas.parentElement ? 
+                    this.canvas.parentElement.clientWidth - 20 : 
+                    Math.min(window.innerWidth - 40, 600);
+                    
                 canvasSize = {
-                    width: Math.min(CONFIG.FFT.CANVAS_SIZE.width, 600),
+                    width: Math.min(containerWidth, 600),
                     height: Math.min(CONFIG.FFT.CANVAS_SIZE.height, 250)
                 };
             } else {
@@ -106,23 +111,23 @@ class FFTManager {
                 };
             }
 
-            // Set canvas size
-            this.canvas.width = canvasSize.width;
-            this.canvas.height = canvasSize.height;
+            // Set display size (CSS pixels)
+            this.canvas.style.width = canvasSize.width + 'px';
+            this.canvas.style.height = canvasSize.height + 'px';
 
-            // Apply high DPI scaling
-            const pixelRatio = Utils.getPixelRatio();
-            if (pixelRatio > 1) {
-                this.canvas.width *= pixelRatio;
-                this.canvas.height *= pixelRatio;
-                this.canvas.style.width = canvasSize.width + 'px';
-                this.canvas.style.height = canvasSize.height + 'px';
-                this.ctx.scale(pixelRatio, pixelRatio);
-            }
+            // Set actual canvas size (device pixels)
+            this.canvas.width = canvasSize.width * pixelRatio;
+            this.canvas.height = canvasSize.height * pixelRatio;
+
+            // Scale the drawing context so everything draws at the correct size
+            this.ctx.scale(pixelRatio, pixelRatio);
 
             console.log('FFT Canvas initialized successfully:', {
-                width: this.canvas.width,
-                height: this.canvas.height,
+                displayWidth: canvasSize.width,
+                displayHeight: canvasSize.height,
+                actualWidth: this.canvas.width,
+                actualHeight: this.canvas.height,
+                pixelRatio: pixelRatio,
                 mobile: isMobile,
                 pixelRatio: Utils.getPixelRatio()
             });
@@ -139,6 +144,37 @@ class FFTManager {
     }
 
     /**
+     * Reinitialize canvas (useful for orientation changes on mobile)
+     */
+    reinitializeCanvas() {
+        if (!this.canvas || !this.ctx) return false;
+        
+        console.log('Reinitializing FFT canvas...');
+        
+        // Store current spectrum data
+        const currentSpectrum = this.lastSpectrum;
+        const currentFrequencies = this.frequencies;
+        const currentHz12_5Index = this.hz12_5Index;
+        const currentHz12_5Value = this.lastHz12_5Value;
+        
+        // Reinitialize canvas
+        const success = this.initializeCanvas();
+        
+        // Restore and redraw if we had data
+        if (success && currentSpectrum && currentSpectrum.length > 0) {
+            this.lastSpectrum = currentSpectrum;
+            this.frequencies = currentFrequencies;
+            this.hz12_5Index = currentHz12_5Index;
+            this.lastHz12_5Value = currentHz12_5Value;
+            
+            // Redraw the spectrum
+            this.drawSpectrum(currentSpectrum, currentHz12_5Index, currentHz12_5Value);
+        }
+        
+        return success;
+    }
+
+    /**
      * Draw initial canvas state
      */
     drawInitialState() {
@@ -149,9 +185,16 @@ class FFTManager {
             return;
         }
 
-        const width = this.canvas.width / Utils.getPixelRatio();
-        const height = this.canvas.height / Utils.getPixelRatio();
         const isMobile = Utils.isMobile();
+        const pixelRatio = Utils.getPixelRatio();
+        
+        // Get actual display dimensions
+        const width = isMobile ? 
+            parseInt(this.canvas.style.width) || this.canvas.width :
+            this.canvas.width / pixelRatio;
+        const height = isMobile ? 
+            parseInt(this.canvas.style.height) || this.canvas.height :
+            this.canvas.height / pixelRatio;
 
         // Clear canvas
         this.ctx.fillStyle = '#000';
@@ -569,8 +612,14 @@ class FFTManager {
         try {
             const isMobile = Utils.isMobile();
             const pixelRatio = Utils.getPixelRatio();
-            const width = this.canvas.width / pixelRatio;
-            const height = this.canvas.height / pixelRatio;
+            
+            // Get actual display dimensions
+            const width = isMobile ? 
+                parseInt(this.canvas.style.width) || this.canvas.width :
+                this.canvas.width / pixelRatio;
+            const height = isMobile ? 
+                parseInt(this.canvas.style.height) || this.canvas.height :
+                this.canvas.height / pixelRatio;
             
             // Adjust margins for mobile
             const margin = isMobile ? 25 : 40;

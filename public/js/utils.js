@@ -389,7 +389,8 @@ class Utils {
      * Check if device is mobile
      */
     static isMobile() {
-        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+               (window.innerWidth <= 768);
     }
 
     /**
@@ -691,7 +692,7 @@ class Utils {
     static getSystemInfo() {
         return {
             browser: Utils.getBrowserInfo(),
-            mobile: Utils.isMobileDevice(),
+            mobile: Utils.isMobile(),
             tablet: Utils.isTabletDevice(),
             touch: Utils.isTouchDevice(),
             pixelRatio: Utils.getPixelRatio(),
