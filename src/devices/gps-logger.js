@@ -31,9 +31,11 @@ class GPSLogger {
     this.logFilePath = null;
     this.logStartTime = null;
     this.spectrumSize = 200; // Default size, will be updated based on actual data
+    this.xl2FrequencyBands = null; // Will be set from XL2 device
     
     this.setupGPSParser();
     this.createLogsDirectory();
+    this.setupXL2FrequencyListener();
   }
 
   createLogsDirectory() {
@@ -42,6 +44,44 @@ class GPSLogger {
       fs.mkdirSync(logsDir, { recursive: true });
       console.log('📁 Created logs directory');
     }
+  }
+
+  setupXL2FrequencyListener() {
+    // Listen for XL2 frequency bands if eventEmitter is available
+    if (this.eventEmitter) {
+      this.eventEmitter.on('xl2-fft-frequencies', (data) => {
+        if (data && data.frequencies && Array.isArray(data.frequencies)) {
+          this.xl2FrequencyBands = data.frequencies;
+          console.log(`📊 GPS Logger: Received ${data.frequencies.length} frequency bands from XL2 device`);
+          console.log(`📊 Frequency range: ${data.frequencies[0]} - ${data.frequencies[data.frequencies.length-1]} Hz`);
+          
+          // Update spectrum size
+          this.spectrumSize = data.frequencies.length;
+          
+          // If logging is active and we were using fallback headers, warn about format mismatch
+          if (this.isLogging && this.csvWriter) {
+            console.log('⚠️ XL2 frequency bands received after logging started. Current log file may have different headers.');
+            console.log('💡 Consider stopping and restarting logging to use the correct XL2 frequency headers.');
+          }
+        }
+      });
+    }
+  }
+
+  /**
+   * Get current frequency bands (for external access)
+   * @returns {Array|null} Array of frequency bands or null if not available
+   */
+  getFrequencyBands() {
+    return this.xl2FrequencyBands;
+  }
+
+  /**
+   * Check if XL2 frequency bands are available
+   * @returns {boolean} True if frequency bands are available
+   */
+  hasFrequencyBands() {
+    return this.xl2FrequencyBands && this.xl2FrequencyBands.length > 0;
   }
 
   setupGPSParser() {
@@ -376,32 +416,42 @@ class GPSLogger {
     // Check if file exists to determine if we need headers
     const fileExists = fs.existsSync(this.logFilePath);
 
-    // Create dynamic header for full spectrum logging
+    // Create header matching XL2 format exactly
     const baseHeaders = [
-      { id: 'datum', title: 'Datum' },
-      { id: 'uhrzeit', title: 'Uhrzeit' },
-      { id: 'pegel_db', title: 'Pegel_12.5Hz_dB' },
-      { id: 'latitude', title: 'GPS_Latitude' },
-      { id: 'longitude', title: 'GPS_Longitude' },
-      { id: 'altitude', title: 'GPS_Altitude_m' },
-      { id: 'satellites', title: 'GPS_Satellites' },
-      { id: 'gps_fix', title: 'GPS_Fix_Quality' }
+      { id: 'datum_zeit', title: 'Datum Zeit' },
+      { id: 'latitude', title: 'Lat' },
+      { id: 'longitude', title: 'Long' },
+      { id: 'altitude', title: 'At' },
+      { id: 'satellites', title: 'Sat' },
+      { id: 'gps_fix', title: 'Fix' }
     ];
 
-    // Add spectrum columns (dynamic based on actual FFT size)
-    const spectrumHeaders = [];
-    for (let i = 0; i < this.spectrumSize; i++) {
-      spectrumHeaders.push({ id: `spectrum_${i}`, title: `Spectrum_Bin_${i}_dB` });
+    // Add XL2 frequency band headers (use dynamic frequencies from XL2 device)
+    let frequencyHeaders = [];
+    if (this.xl2FrequencyBands && this.xl2FrequencyBands.length > 0) {
+      // Use actual frequency bands from XL2 device
+      frequencyHeaders = this.xl2FrequencyBands.map(freq => ({
+        id: `freq_${freq.toFixed(2).replace('.', '_')}`,
+        title: `${freq.toFixed(2)} Hz`
+      }));
+      console.log(`📊 Using ${this.xl2FrequencyBands.length} frequency bands from XL2 device`);
+    } else {
+      // Fallback: Use default spectrum bins if XL2 frequencies not available yet
+      console.log('⚠️ XL2 frequency bands not available yet, using default spectrum bins');
+      for (let i = 0; i < this.spectrumSize; i++) {
+        frequencyHeaders.push({ id: `spectrum_${i}`, title: `Spectrum_Bin_${i}_dB` });
+      }
     }
 
-    const allHeaders = [...baseHeaders, ...spectrumHeaders];
+    const allHeaders = [...baseHeaders, ...frequencyHeaders];
 
-    // Create CSV writer with append mode
+    // Create CSV writer with German format (semicolon separator)
     this.csvWriter = createCsvWriter.createObjectCsvWriter({
       path: this.logFilePath,
       header: allHeaders,
       encoding: 'utf8',
-      append: fileExists // Append if file exists, create with headers if not
+      append: fileExists, // Append if file exists, create with headers if not
+      fieldDelimiter: ';' // Use semicolon as separator for German CSV format
     });
 
     this.isLogging = true;
@@ -444,41 +494,59 @@ class GPSLogger {
     }
 
     const now = new Date();
-    const datum = now.toLocaleDateString('de-DE');
-    const uhrzeit = now.toLocaleTimeString('de-DE');
+    // German format: DD.MM.YYYY HH:MM:SS
+    const datumZeit = now.toLocaleDateString('de-DE') + ' ' + now.toLocaleTimeString('de-DE');
 
-    const logEntry = {
-      datum: datum,
-      uhrzeit: uhrzeit,
-      pegel_db: pegelValue !== null ? pegelValue.toFixed(2) : 'N/A',
-      latitude: this.currentLocation.latitude || 'N/A',
-      longitude: this.currentLocation.longitude || 'N/A',
-      altitude: this.currentLocation.altitude || 'N/A',
-      satellites: this.currentLocation.satellites || 'N/A',
-      gps_fix: this.currentLocation.fix || 'N/A'
+    // Helper function to format numbers with German decimal format (comma instead of dot)
+    const formatGermanNumber = (value) => {
+      if (value === null || value === undefined || isNaN(value)) return '';
+      return value.toFixed(1).replace('.', ',');
     };
 
-    // Add full spectrum data if available
+    const logEntry = {
+      datum_zeit: datumZeit,
+      latitude: this.currentLocation.latitude ? formatGermanNumber(this.currentLocation.latitude) : '',
+      longitude: this.currentLocation.longitude ? formatGermanNumber(this.currentLocation.longitude) : '',
+      altitude: this.currentLocation.altitude ? formatGermanNumber(this.currentLocation.altitude) : '',
+      satellites: this.currentLocation.satellites || '',
+      gps_fix: this.currentLocation.fix || ''
+    };
+
+    // Add frequency band data if available
     if (fullMeasurement && fullMeasurement.spectrum && Array.isArray(fullMeasurement.spectrum)) {
-      // Update spectrum size if we get more data than expected
-      if (fullMeasurement.spectrum.length > this.spectrumSize) {
-        console.log(`📊 Updating spectrum size from ${this.spectrumSize} to ${fullMeasurement.spectrum.length} bins`);
-        this.spectrumSize = fullMeasurement.spectrum.length;
-      }
-      
-      // Add all spectrum values to log entry
-      fullMeasurement.spectrum.forEach((value, index) => {
-        logEntry[`spectrum_${index}`] = value !== null && !isNaN(value) ? value.toFixed(2) : 'N/A';
-      });
-      
-      // Fill remaining spectrum columns with N/A
-      for (let i = fullMeasurement.spectrum.length; i < this.spectrumSize; i++) {
-        logEntry[`spectrum_${i}`] = 'N/A';
+      if (this.xl2FrequencyBands && this.xl2FrequencyBands.length > 0) {
+        // Use XL2 frequency bands (dynamic from device)
+        this.xl2FrequencyBands.forEach((freq, index) => {
+          const fieldId = `freq_${freq.toFixed(2).replace('.', '_')}`;
+          if (index < fullMeasurement.spectrum.length) {
+            const value = fullMeasurement.spectrum[index];
+            logEntry[fieldId] = formatGermanNumber(value);
+          } else {
+            logEntry[fieldId] = '';
+          }
+        });
+      } else {
+        // Fallback: Use spectrum bin format
+        fullMeasurement.spectrum.forEach((value, index) => {
+          logEntry[`spectrum_${index}`] = formatGermanNumber(value);
+        });
+        
+        // Fill remaining spectrum columns with empty values
+        for (let i = fullMeasurement.spectrum.length; i < this.spectrumSize; i++) {
+          logEntry[`spectrum_${i}`] = '';
+        }
       }
     } else {
-      // Fill all spectrum columns with N/A if no spectrum data
-      for (let i = 0; i < this.spectrumSize; i++) {
-        logEntry[`spectrum_${i}`] = 'N/A';
+      // Fill all frequency/spectrum columns with empty values if no spectrum data
+      if (this.xl2FrequencyBands && this.xl2FrequencyBands.length > 0) {
+        this.xl2FrequencyBands.forEach(freq => {
+          const fieldId = `freq_${freq.toFixed(2).replace('.', '_')}`;
+          logEntry[fieldId] = '';
+        });
+      } else {
+        for (let i = 0; i < this.spectrumSize; i++) {
+          logEntry[`spectrum_${i}`] = '';
+        }
       }
     }
 
@@ -486,7 +554,7 @@ class GPSLogger {
       await this.csvWriter.writeRecords([logEntry]);
       const spectrumInfo = fullMeasurement && fullMeasurement.spectrum ? 
         `| Spectrum: ${fullMeasurement.spectrum.length} bins` : '| No spectrum data';
-      console.log(`📝 Logged: ${datum} ${uhrzeit} | ${pegelValue?.toFixed(2) || 'N/A'} dB ${spectrumInfo} | GPS: ${this.currentLocation.latitude || 'N/A'}, ${this.currentLocation.longitude || 'N/A'}`);
+      console.log(`📝 Logged: ${datumZeit} ${spectrumInfo} | GPS: ${this.currentLocation.latitude || 'N/A'}, ${this.currentLocation.longitude || 'N/A'}`);
     } catch (error) {
       console.error('❌ Error writing to log file:', error);
     }

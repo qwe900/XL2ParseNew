@@ -483,8 +483,25 @@ export function createApiRoutes(xl2, gpsLogger, generatePathFromCSV, startupServ
         logger.info(`Renamed current log file to: ${renamedFile}`);
       }
       
-      // Create new empty log file with headers
-      const headers = 'Datum,Uhrzeit,Pegel_12.5Hz_dB,GPS_Latitude,GPS_Longitude,GPS_Altitude,GPS_Satellites,GPS_Fix\n';
+      // Create new empty log file with XL2 format headers (use dynamic frequencies from XL2)
+      const baseHeaders = ['Datum Zeit', 'Lat', 'Long', 'At', 'Sat', 'Fix'];
+      let frequencyHeaders = [];
+      
+      // Try to get actual frequency bands from XL2 device
+      const xl2FrequencyBands = xl2.getStoredFFTFrequencies();
+      if (xl2FrequencyBands && xl2FrequencyBands.length > 0) {
+        frequencyHeaders = xl2FrequencyBands.map(freq => `${freq.toFixed(2)} Hz`);
+        logger.info(`Using ${xl2FrequencyBands.length} frequency bands from XL2 device for new log file`);
+      } else {
+        // Fallback: Use default spectrum bins if XL2 frequencies not available
+        logger.warn('XL2 frequency bands not available, using default spectrum bins for new log file');
+        for (let i = 0; i < 200; i++) {
+          frequencyHeaders.push(`Spectrum_Bin_${i}_dB`);
+        }
+      }
+      
+      const allHeaders = [...baseHeaders, ...frequencyHeaders];
+      const headers = allHeaders.join(';') + '\n';
       fs.writeFileSync(currentLogPath, headers, 'utf8');
       
       logger.info('Created new empty log file: xl2_measurements.csv');

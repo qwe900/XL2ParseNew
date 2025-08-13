@@ -65,21 +65,49 @@ export class CSVService {
    */
   _parseCSVLine(line) {
     try {
-      const columns = line.split(',');
-      if (columns.length < 8) {
+      // Handle both old format (comma) and new format (semicolon)
+      const separator = line.includes(';') ? ';' : ',';
+      const columns = line.split(separator);
+      
+      if (columns.length < 6) {
         return null;
       }
 
-      return {
-        datum: columns[0]?.trim(),
-        uhrzeit: columns[1]?.trim(),
-        pegel_db: parseFloat(columns[2]),
-        latitude: parseFloat(columns[3]),
-        longitude: parseFloat(columns[4]),
-        altitude: parseFloat(columns[5]),
-        satellites: parseInt(columns[6]),
-        gps_fix: columns[7]?.trim()
+      // Helper function to parse German number format (comma as decimal separator)
+      const parseGermanNumber = (value) => {
+        if (!value || value.trim() === '') return null;
+        return parseFloat(value.replace(',', '.'));
       };
+
+      // New format: Datum Zeit;Lat;Long;At;Sat;Fix;12.50 Hz;...
+      if (separator === ';') {
+        const datumZeit = columns[0]?.trim();
+        const [datum, uhrzeit] = datumZeit ? datumZeit.split(' ') : ['', ''];
+        
+        return {
+          datum: datum,
+          uhrzeit: uhrzeit,
+          pegel_db: columns.length > 6 ? parseGermanNumber(columns[6]) : null, // First frequency band (12.50 Hz)
+          latitude: parseGermanNumber(columns[1]),
+          longitude: parseGermanNumber(columns[2]),
+          altitude: parseGermanNumber(columns[3]),
+          satellites: columns[4] ? parseInt(columns[4]) : null,
+          gps_fix: columns[5]?.trim(),
+          spectrum: columns.slice(6).map(val => parseGermanNumber(val)).filter(val => val !== null)
+        };
+      } else {
+        // Old format: Datum,Uhrzeit,Pegel_12.5Hz_dB,GPS_Latitude,GPS_Longitude,GPS_Altitude,GPS_Satellites,GPS_Fix
+        return {
+          datum: columns[0]?.trim(),
+          uhrzeit: columns[1]?.trim(),
+          pegel_db: parseFloat(columns[2]),
+          latitude: parseFloat(columns[3]),
+          longitude: parseFloat(columns[4]),
+          altitude: parseFloat(columns[5]),
+          satellites: parseInt(columns[6]),
+          gps_fix: columns[7]?.trim()
+        };
+      }
     } catch (error) {
       logger.debug('Error parsing CSV line', { line, error: error.message });
       return null;
