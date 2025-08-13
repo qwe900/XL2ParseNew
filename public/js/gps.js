@@ -36,11 +36,13 @@ class GPSManager {
                 console.log('🗺️ DOMContentLoaded fired, initializing map');
                 this.initializeMap();
                 this.updateMapInfo();
+                this.updatePathTrackingDisplay();
             });
         } else {
             console.log('🗺️ DOM already ready, initializing map immediately');
             this.initializeMap();
             this.updateMapInfo();
+            this.updatePathTrackingDisplay();
         }
     }
 
@@ -93,6 +95,16 @@ class GPSManager {
                 this.handleGPSPorts(ports);
             } catch (error) {
                 console.error('Error parsing GPS ports data:', error);
+            }
+        });
+
+        // Listen for logging status changes to auto-manage path tracking
+        this.eventSource.addEventListener('logging-status', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                this.handleLoggingStatusChange(data);
+            } catch (error) {
+                console.error('Error parsing logging status data:', error);
             }
         });
 
@@ -639,24 +651,20 @@ class GPSManager {
     }
 
     /**
-     * Check if auto-tracking should be enabled
+     * Check if auto-tracking should be enabled based on logging status
      */
     checkAutoTracking(location) {
-        // Only auto-start if not already tracking
-        if (this.isTracking) return;
-        
-        // Check if GPS has a good fix
+        // Path tracking is now controlled by logging status
+        // This method now only ensures we have a good GPS fix for accurate tracking
         const hasGoodFix = location.fix && (location.fix === '3D' || location.fix === '2D' || location.satellites >= 4);
-        if (!hasGoodFix) return;
         
-        // Check if XL2 FFT is measuring
-        const isXL2Measuring = this.isXL2FFTMeasuring();
-        if (!isXL2Measuring) return;
-        
-        // Auto-start tracking
-        console.log('🚀 Auto-starting GPS tracking: XL2 FFT measuring + GPS fix available');
-        this.toggleTracking();
-        ui.showToast('Auto-started GPS tracking: XL2 measuring + GPS fix', 'success');
+        if (hasGoodFix && this.isTracking) {
+            // GPS fix is good and tracking is active (via logging)
+            console.log('📍 GPS tracking active with good fix');
+        } else if (!hasGoodFix && this.isTracking) {
+            // Warn if tracking is active but GPS fix is poor
+            console.warn('⚠️ GPS tracking active but poor GPS fix');
+        }
     }
     
     /**
@@ -684,6 +692,55 @@ class GPSManager {
         }
         
         return false;
+    }
+
+    /**
+     * Handle logging status changes to auto-manage path tracking
+     */
+    handleLoggingStatusChange(data) {
+        const isLoggingActive = data.isLogging || data.active || false;
+        
+        if (isLoggingActive && !this.isTracking) {
+            // Start path tracking when logging starts
+            this.isTracking = true;
+            console.log('🛤️ Auto-started path tracking: Logging activated');
+            ui.showToast('Path tracking started with logging', 'success');
+        } else if (!isLoggingActive && this.isTracking) {
+            // Stop path tracking when logging stops
+            this.isTracking = false;
+            console.log('🛤️ Auto-stopped path tracking: Logging deactivated');
+            ui.showToast('Path tracking stopped with logging', 'info');
+        }
+        
+        this.updatePathTrackingDisplay();
+    }
+
+    /**
+     * Update path tracking display based on current status
+     */
+    updatePathTrackingDisplay() {
+        // Update any UI elements that show path tracking status
+        // This replaces the old button-based status updates
+        const mapInfo = document.querySelector('.map-info');
+        if (mapInfo) {
+            let statusElement = document.getElementById('pathTrackingStatus');
+            if (!statusElement) {
+                statusElement = document.createElement('div');
+                statusElement.id = 'pathTrackingStatus';
+                statusElement.className = 'map-info-item';
+                statusElement.innerHTML = `
+                    <div class="map-info-value" id="pathTrackingValue">--</div>
+                    <div class="map-info-label">Path Tracking</div>
+                `;
+                mapInfo.appendChild(statusElement);
+            }
+            
+            const valueElement = document.getElementById('pathTrackingValue');
+            if (valueElement) {
+                valueElement.textContent = this.isTracking ? 'Active' : 'Inactive';
+                valueElement.style.color = this.isTracking ? '#28a745' : '#6c757d';
+            }
+        }
     }
 
     /**
@@ -1734,47 +1791,14 @@ class GPSManager {
     }
 
     /**
-     * Toggle path recording
+     * Toggle path recording (DEPRECATED - Path tracking is now automatic with logging)
      */
     togglePathRecording() {
-        this.isTracking = !this.isTracking;
-        const button = document.getElementById('pathToggle');
-        
-        if (this.isTracking) {
-            button.textContent = '⏹️ Stop Path';
-            button.className = 'btn btn-danger recording';
-            console.log('📍 Path recording started');
-            ui.showToast('Path recording started', 'success');
-        } else {
-            button.textContent = '🛤️ Start Path';
-            button.className = 'btn btn-success';
-            console.log('📍 Path recording stopped');
-            ui.showToast('Path recording stopped', 'info');
-        }
-        
-        this.updatePathRecordingStatus();
+        console.warn('⚠️ togglePathRecording is deprecated. Path tracking is now automatic with logging.');
+        ui.showToast('Path tracking is now automatic with logging', 'info');
     }
 
-    /**
-     * Update path recording status display
-     */
-    updatePathRecordingStatus() {
-        const button = document.getElementById('pathToggle');
-        if (!button) return;
-        
-        if (this.isTracking) {
-            if (this.isLoggingActive()) {
-                button.title = 'Path recording active - recording points';
-                button.className = 'btn btn-danger recording';
-            } else {
-                button.title = 'Path recording enabled - waiting for CSV logging to start';
-                button.className = 'btn btn-warning';
-            }
-        } else {
-            button.title = 'Click to start path recording';
-            button.className = 'btn btn-success';
-        }
-    }
+
 
     /**
      * Check if logging is currently active

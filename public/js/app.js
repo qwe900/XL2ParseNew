@@ -1163,6 +1163,11 @@ async function startLogging() {
         // Update logging status immediately
         updateLoggingStatus();
         
+        // Notify GPS manager about logging status change
+        if (window.app && window.app.gpsManager) {
+            window.app.gpsManager.handleLoggingStatusChange({ isLogging: true, active: true });
+        }
+        
         return result;
     } catch (error) {
         console.error('Error starting logging:', error);
@@ -1190,6 +1195,11 @@ async function stopLogging() {
         
         // Update logging status immediately
         updateLoggingStatus();
+        
+        // Notify GPS manager about logging status change
+        if (window.app && window.app.gpsManager) {
+            window.app.gpsManager.handleLoggingStatusChange({ isLogging: false, active: false });
+        }
         
         return result;
     } catch (error) {
