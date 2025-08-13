@@ -1,6 +1,6 @@
 # 🎵 XL2 Web Server
 
-A modern Node.js web application that provides a real-time web interface for the **NTI Audio XL2 Sound Level Meter**. Monitor sound measurements, GPS location tracking, and data logging through an intuitive web dashboard.
+A modern Node.js web application that provides a real-time web interface for the **NTI Audio XL2 Sound Level Meter**. Monitor sound measurements, GPS location tracking, and data logging through an intuitive web dashboard with automatic path tracking.
 
 ![Node.js](https://img.shields.io/badge/Node.js-18.x-green.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Raspberry%20Pi%20%7C%20Linux-blue.svg)
@@ -9,11 +9,12 @@ A modern Node.js web application that provides a real-time web interface for the
 ## ✨ Features
 
 ### 🎯 Core Functionality
-- **Real-time Sound Monitoring**: Live 12.5Hz sound level measurements
+- **Real-time Sound Monitoring**: Live FFT spectrum measurements with dynamic frequency bands
 - **GPS Integration**: Position tracking with VK-162 or compatible GPS modules
-- **FFT Spectrum Analysis**: Real-time frequency spectrum visualization
-- **Data Logging**: CSV export with sound measurements and GPS coordinates
-- **Heatmap Visualization**: Interactive maps showing sound level distribution
+- **FFT Spectrum Analysis**: Real-time frequency spectrum visualization (12.5-64.5 Hz)
+- **XL2 CSV Format**: German-format CSV logging with exact XL2 frequency bands
+- **Automatic Path Tracking**: GPS path tracking starts/stops automatically with logging
+- **Interactive Maps**: Real-time GPS tracking with Leaflet maps
 - **Multi-client Support**: Multiple users can connect simultaneously
 
 ### 🖥️ Cross-Platform Support
@@ -24,8 +25,9 @@ A modern Node.js web application that provides a real-time web interface for the
 
 ### 🔧 Advanced Features
 - **Auto-device Detection**: Automatically finds XL2 and GPS devices
-- **System Monitoring**: Real-time performance metrics
-- **WebSocket Communication**: Low-latency real-time updates
+- **Dynamic Frequency Bands**: Uses actual frequency bands from XL2 device (MEAS:FFT:F?)
+- **Server-Sent Events**: Low-latency real-time updates via SSE
+- **German CSV Format**: Semicolon-separated values with comma decimal points
 - **Security**: CORS protection, rate limiting, and helmet security
 - **Service Installation**: Run as Windows Service or Linux daemon
 
@@ -89,6 +91,17 @@ npm start
 - **Node.js 18.x or later** ([Download](https://nodejs.org/))
 - **npm** (included with Node.js)
 
+### Dependencies
+- **express**: ^4.18.2 - Web server framework
+- **serialport**: ^12.0.0 - Serial device communication
+- **gps**: ^0.6.1 - GPS data parsing
+- **csv-writer**: ^1.6.0 - CSV file generation
+- **compression**: ^1.7.4 - HTTP response compression
+- **helmet**: ^7.0.0 - Security middleware
+- **cors**: ^2.8.5 - Cross-origin resource sharing
+- **express-rate-limit**: ^7.5.1 - API rate limiting
+- **dotenv**: ^17.2.1 - Environment variable management
+
 ### Hardware Requirements
 - **NTI Audio XL2 Sound Level Meter** with USB connection
 - **GPS Module** (optional): VK-162 or compatible USB GPS receiver
@@ -137,6 +150,11 @@ The application automatically detects connected devices:
 2. Install drivers if prompted (usually automatic)
 3. Device appears as serial port (COM port on Windows)
 4. Application auto-detects and connects
+5. **FFT Configuration**: Application automatically configures XL2 for FFT mode:
+   - `MEAS:FUNC FFT` - Set to FFT measurement mode
+   - `MEAS:FFT:ZOOM 9` - Set zoom level
+   - `MEAS:FFT:FSTART 12.5` - Set start frequency to 12.5 Hz
+   - `MEAS:FFT:F?` - Query actual frequency bands (145 bands: 12.50-64.50 Hz)
 
 ### GPS Module (Optional)
 1. Connect VK-162 or compatible GPS module
@@ -162,32 +180,41 @@ node tools/test-gps.js
 Access the web dashboard at: **http://localhost:3000**
 
 ### Dashboard Features
-- **Live Measurements**: Real-time sound level display
-- **GPS Map**: Interactive map with current position
-- **FFT Spectrum**: Frequency analysis visualization
-- **Data Export**: Download CSV files with measurements
-- **System Status**: Device connection and system health
-- **Settings**: Configure measurement parameters
+- **Live Measurements**: Real-time FFT spectrum display with 145 frequency bands
+- **GPS Map**: Interactive Leaflet map with automatic path tracking
+- **FFT Spectrum**: Real-time frequency analysis visualization (12.5-64.5 Hz)
+- **Data Export**: Download XL2-compatible CSV files with German formatting
+- **System Status**: Device connection and system health monitoring
+- **Automatic Logging**: Path tracking starts/stops automatically with data logging
 
 ### Multi-Device Access
 - **Local Network**: http://YOUR-IP:3000
 - **Mobile Devices**: Responsive design for tablets/phones
-- **Multiple Clients**: Support for concurrent users
+- **Multiple Clients**: Support for concurrent users via Server-Sent Events
 
 ## 📊 Data Logging
 
-### CSV Export Format
+### XL2-Compatible CSV Format
+The application generates CSV files in the exact format used by the XL2 device:
+
 ```csv
-Timestamp,Latitude,Longitude,SPL_dB,Frequency_Hz,Temperature_C
-2024-01-15T10:30:00.000Z,40.7128,-74.0060,65.2,1000,22.5
+Datum Zeit;Lat;Long;At;Sat;Fix;12.50 Hz;12.87 Hz;13.23 Hz;...;64.50 Hz
+12.08.2025 23:14:14;54,160031;9,852432833;25,6;6;1;36,1;36,4;39,1;...
 ```
 
+### Key Features
+- **German Format**: Semicolon separators, comma decimal points
+- **Dynamic Frequency Bands**: Uses actual frequency bands from XL2 device (MEAS:FFT:F?)
+- **145 Frequency Columns**: Complete spectrum from 12.50 Hz to 64.50 Hz
+- **GPS Integration**: Latitude, longitude, altitude, satellites, and fix quality
+- **Automatic Path Tracking**: GPS path recording tied to logging status
+
 ### Logging Features
-- **Automatic Logging**: Continuous data capture
-- **Manual Export**: Download data on demand
-- **GPS Integration**: Location data with measurements
-- **Configurable Intervals**: Adjust logging frequency
-- **File Management**: Automatic file rotation
+- **Automatic Logging**: Continuous data capture when logging is active
+- **XL2 Compatibility**: Files can be imported into XL2 analysis software
+- **GPS Integration**: Location data synchronized with measurements
+- **Real-time Updates**: Live path tracking on interactive map
+- **File Management**: Single log file with append functionality
 
 ## 🛠️ Development
 
@@ -198,9 +225,12 @@ XL2ParseNew/
 │   ├── config/          # Configuration management
 │   ├── devices/         # XL2 and GPS device handlers
 │   ├── routes/          # Express API routes
-│   ├── services/        # Business logic services
+│   ├── services/        # Business logic services (SSE, CSV)
 │   └── utils/           # Utility functions
 ├── public/              # Web interface files
+│   ├── js/              # Client-side JavaScript
+│   ├── css/             # Stylesheets
+│   └── index.html       # Main web interface
 ├── tools/               # Development and testing tools
 ├── server.js            # Main application entry point
 └── package.json         # Project dependencies
@@ -208,18 +238,19 @@ XL2ParseNew/
 
 ### Available Scripts
 ```bash
-npm start              # Start production server
-npm run dev            # Start with auto-reload (nodemon)
-npm run port-info      # List available serial ports
-npm run install-windows # Windows installation script
+npm start                    # Start production server
+npm run dev                  # Start with auto-reload (nodemon)
+npm run port-info           # List available serial ports
+npm run install-windows     # Windows installation script
+npm run install-windows-service # Install as Windows service
 ```
 
 ### API Endpoints
 - `GET /api/status` - System and device status
-- `GET /api/measurements` - Latest sound measurements
-- `GET /api/gps` - Current GPS position
-- `GET /api/export` - Download CSV data
-- `WebSocket /socket.io` - Real-time data stream
+- `GET /api/xl2/fft-frequencies` - Get XL2 frequency bands
+- `GET /api/gps/location` - Current GPS position
+- `GET /api/csv/export` - Download CSV data
+- `GET /events` - Server-Sent Events stream for real-time updates
 
 ## 🔧 Platform-Specific Setup
 
@@ -247,10 +278,11 @@ npm run install-windows # Windows installation script
 
 ### Built-in Security Features
 - **CORS Protection**: Configurable origin restrictions
-- **Rate Limiting**: Prevent API abuse
+- **Rate Limiting**: Prevent API abuse (express-rate-limit)
 - **Helmet Security**: HTTP security headers
 - **Input Validation**: Sanitized user inputs
 - **Error Handling**: Secure error responses
+- **Compression**: HTTP response compression for performance
 
 ### Network Security
 ```env
@@ -338,7 +370,7 @@ tail -f logs/xl2-server.log
 - **[Windows Setup Guide](README-Windows.md)** - Detailed Windows installation
 - **[Raspberry Pi Setup](raspberry-pi-setup.md)** - Pi-specific configuration
 - **[API Documentation](docs/API.md)** - REST API reference
-- **[WebSocket Events](docs/WebSocket.md)** - Real-time communication
+- **[Server-Sent Events](docs/SSE.md)** - Real-time communication via SSE
 
 ## 🤝 Contributing
 
